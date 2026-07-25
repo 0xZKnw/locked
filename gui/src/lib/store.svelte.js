@@ -213,6 +213,14 @@ function handle(e) {
       break;
     }
 
+    // Shown in the transcript rather than logged somewhere: from here on the
+    // agent answers from a summary of what came before, and the user is entitled
+    // to know that before it gets an early detail wrong.
+    case "compacted":
+      seal();
+      push({ kind: "compacted", dropped: e.dropped });
+      break;
+
     case "receipt_appended":
       app.receipts.push(e.receipt);
       break;

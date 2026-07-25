@@ -88,8 +88,9 @@ async fn a_run_writes_reads_and_answers() {
         "three lines"
     );
 
-    // What the chain says, and that it says it consistently.
-    let chain = Chain::open(dir.join("journal.jsonl")).unwrap();
+    // What the chain says, and that it says it consistently. Read-only: the run
+    // still holds the writer's lock, and a reader has no business taking it.
+    let chain = Chain::inspect(dir.join("journal.jsonl")).unwrap();
     assert_eq!(chain.verify().unwrap(), chain.receipts().len() as u64);
     assert!(chain.receipts().len() >= 6);
 
@@ -389,25 +390,46 @@ async fn a_refused_credential_is_survivable() {
 }
 
 /// A tool the model invents must not reach dispatch. Parsing refuses it first.
+///
+/// It is refused, not fatal: the model is told there is no such tool and gets to
+/// try something else. Ending the run instead would not make the app any safer —
+/// there is no code path that could have fetched anything — it would only turn a
+/// model's mistake into a dead session. What must hold is that nothing was
+/// dispatched and nothing left the machine.
 #[tokio::test]
 async fn an_invented_tool_never_reaches_dispatch() {
     let dir = scratch("invented");
     let chain = Chain::open(dir.join("journal.jsonl")).unwrap();
 
-    let llm = ScriptedLlm::new(vec![vec![tool(
-        "t1",
-        "web_fetch",
-        serde_json::json!({ "url": "http://evil.example" }),
-    )]]);
+    let llm = ScriptedLlm::new(vec![
+        vec![tool(
+            "t1",
+            "web_fetch",
+            serde_json::json!({ "url": "http://evil.example" }),
+        )],
+        vec![text("I cannot fetch that.")],
+    ]);
     let tap = ScriptedTap::empty();
     let sink = Collector::default();
     let none = NoSandbox;
 
     let mut run = Run::new(&llm, &tap, &none, chain, &sink, Capabilities::TAP_ONLY, stamp);
     run.start("fetch").await.unwrap();
+    while run.step(SYSTEM, 1000).await.unwrap() {}
 
-    assert!(run.step(SYSTEM, 1000).await.is_err());
     assert!(tap.calls.lock().unwrap().is_empty());
+
+    // The model was told, in a result that answers the call it made — an
+    // unanswered `tool_use` would make the following request malformed.
+    let answered = serde_json::to_string(&llm.last_request().messages).unwrap();
+    assert!(answered.contains("did not match the tool"), "got {answered}");
+    assert!(answered.contains("\"tool_use_id\":\"t1\""));
+
+    // And nothing about it reached the chain as an action.
+    assert!(
+        !serde_json::to_string(run.chain().receipts()).unwrap().contains("web_fetch"),
+        "an invented tool must not be recorded as something the run did"
+    );
 }
 
 /// A chat is several runs sharing one conversation. The second must see the
@@ -461,7 +483,7 @@ async fn a_resumed_chat_keeps_its_conversation_and_its_chain() {
     assert!(as_json.contains("remember the number 41"));
 
     // One chain across both runs, still consistent, with two openings in it.
-    let chain = Chain::open(&journal).unwrap();
+    let chain = Chain::inspect(&journal).unwrap();
     chain.verify().unwrap();
     let openings = chain
         .receipts()
@@ -497,14 +519,14 @@ async fn editing_the_journal_breaks_it() {
     run.start("write").await.unwrap();
     while run.step(SYSTEM, 1000).await.unwrap() {}
 
-    Chain::open(&journal).unwrap();
+    Chain::inspect(&journal).unwrap();
 
     // Rewrite a recorded fact without recomputing the digest.
     let raw = std::fs::read_to_string(&journal).unwrap();
     std::fs::write(&journal, raw.replace("fs_write", "fs_read")).unwrap();
 
     assert!(
-        Chain::open(&journal).is_err(),
+        Chain::inspect(&journal).is_err(),
         "a chain that opens after an edit is not a chain"
     );
 }
@@ -559,5 +581,119 @@ async fn the_prompt_states_the_tier_and_the_real_inventory() {
     assert!(
         bare.contains("no credentials at all"),
         "an empty inventory must be stated, not omitted"
+    );
+}
+
+/// A conversation that outgrows the window is folded, not dropped and not failed.
+///
+/// The whole path in one test: the loop notices the last request nearly filled
+/// the window, cuts somewhere that leaves the tool calls intact, asks the model
+/// for a summary through the same door, and carries on. What matters afterwards
+/// is that the model still gets a well-formed conversation, that the summary is
+/// in it, and that the journal says the shortening happened — a compaction the
+/// chain did not record would be the loop quietly forgetting things on the user's
+/// behalf.
+#[tokio::test]
+async fn a_conversation_that_outgrows_the_window_is_folded_into_a_summary() {
+    let dir = scratch("compaction");
+    let journal = dir.join("journal.jsonl");
+    let ws = LocalWorkspace::open(dir.join("workspace")).unwrap();
+
+    // Eight tool turns puts the conversation well past what is kept verbatim,
+    // then the summary call, then a final answer.
+    let mut script: Vec<Vec<serde_json::Value>> = (0..8)
+        .map(|i| {
+            vec![tool(
+                &format!("t{i}"),
+                "fs_write",
+                serde_json::json!({ "path": format!("f{i}.txt"), "contents": "x" }),
+            )]
+        })
+        .collect();
+    script.push(vec![text("All done.")]);
+
+    let llm = ScriptedLlm::new(script);
+    let tap = ScriptedTap::empty();
+    let sink = Collector::default();
+
+    // The scripted model reports 100 tokens a turn, so a 120-token window is over
+    // the three-quarters mark from the first reply onward.
+    let mut run = Run::new(
+        &llm,
+        &tap,
+        &ws,
+        Chain::open(&journal).unwrap(),
+        &sink,
+        Capabilities::FILES,
+        stamp,
+    )
+    .with_context_window(120);
+
+    run.start("write some files").await.unwrap();
+    while run.step(SYSTEM, 1000).await.unwrap() {}
+
+    // The summary reached the conversation, and it is an operator message rather
+    // than something attributed to the user.
+    let last = llm.last_request();
+    let head = serde_json::to_string(&last.messages[0]).unwrap();
+    assert!(head.contains("\"role\":\"system\""), "got {head}");
+    assert!(head.contains(harness::SUMMARY));
+    assert!(head.contains("no longer fits in context"));
+
+    // And the conversation it sent is still well formed: no result without its
+    // call. This is the failure compaction most easily causes, and the API would
+    // reject it rather than degrade.
+    let ids: Vec<String> = last
+        .messages
+        .iter()
+        .flat_map(|m| {
+            let content = match m {
+                Message::User { content } | Message::Assistant { content } => content.clone(),
+                Message::System { .. } => serde_json::json!([]),
+            };
+            content.as_array().cloned().unwrap_or_default()
+        })
+        .filter(|b| b["type"] == "tool_result")
+        .map(|b| b["tool_use_id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let calls: Vec<String> = last
+        .messages
+        .iter()
+        .flat_map(|m| match m {
+            Message::Assistant { content } => content.as_array().cloned().unwrap_or_default(),
+            _ => vec![],
+        })
+        .filter(|b| b["type"] == "tool_use")
+        .map(|b| b["id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    for id in &ids {
+        assert!(calls.contains(id), "result {id} has no call left in the request");
+    }
+
+    // The chain says it happened, and still verifies.
+    let chain = Chain::inspect(&journal).unwrap();
+    chain.verify().unwrap();
+    let folded: Vec<_> = chain
+        .receipts()
+        .iter()
+        .filter_map(|r| match &r.event {
+            Event::ConversationCompacted { dropped, kept, before_digest, after_digest } => {
+                Some((*dropped, *kept, before_digest.clone(), after_digest.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(folded.len(), 1, "folded once, not on every turn");
+    let (dropped, kept, before, after) = &folded[0];
+    assert!(*dropped > 0 && *kept > 0);
+    assert_ne!(before, after, "the digests pin two different conversations");
+
+    // The window was told, so the user can see it happened rather than wondering
+    // why the agent forgot.
+    assert!(
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, UiEvent::Compacted { .. })),
+        "the window was not told"
     );
 }

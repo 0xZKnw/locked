@@ -5,9 +5,11 @@
 //! chain detects lazy tampering; it does not defend against someone who controls
 //! the file. We rely on the file being out of the agent's reach, and we say so.
 //!
-//! The journal is also the replay cache: a resumed run reads prior receipts and
-//! re-executes only what changed. That is why it is the project's central format
-//! and not merely a log.
+//! It is deliberately not a transcript store. Prompts, responses and file
+//! contents appear only as digests, so a journal can be handed to someone who
+//! should see *what happened* without seeing what was said. That is also why it
+//! cannot be replayed *from*: there is nothing in here to replay, by design. The
+//! conversation lives beside it, in a file that carries no attestation.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -72,8 +74,32 @@ pub enum Event {
         model: String,
         prompt_digest: String,
         response_digest: String,
+        /// Everything the model read, cached or not — the size of the context,
+        /// not the size of the bill.
         input_tokens: u64,
+        /// How much of that came back from the provider's cache. Absent on
+        /// receipts written before caching existed, and on turns that read
+        /// nothing from it, so old chains keep their exact bytes and their
+        /// digests.
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        cached_tokens: u64,
         output_tokens: u64,
+    },
+    /// The conversation was shortened to fit the model's window.
+    ///
+    /// Recorded because it is a loss. Everything after this point was reasoned
+    /// about from a summary rather than from what was actually said, and a reader
+    /// deciding how much to trust a late answer needs to know that — which is why
+    /// both digests are here: the conversation that went in and the one that came
+    /// out are each pinned, so the shortening is visible even though the text it
+    /// dropped is not stored anywhere.
+    ConversationCompacted {
+        /// Messages folded into the summary.
+        dropped: u32,
+        /// Messages carried forward verbatim.
+        kept: u32,
+        before_digest: String,
+        after_digest: String,
     },
     TapCall {
         credential: String,
@@ -108,9 +134,31 @@ pub struct Receipt {
     pub event: Event,
     #[serde(flatten)]
     pub evidence: Evidence,
+    /// Which rule computed this receipt's digest.
+    ///
+    /// Absent means version 0: the digest was taken over serde's field order,
+    /// which is only stable for one build of one binary. Version 1 is the
+    /// canonical form below, which anyone can recompute.
+    ///
+    /// The field exists so old chains keep verifying instead of being silently
+    /// invalidated by the fix. A project whose claim is "recompute it yourself"
+    /// cannot rewrite the rule and hope nobody had a journal.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub v: u8,
     /// Digest of every field above. Becomes the next receipt's `prev`.
     pub digest: String,
 }
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
+}
+
+/// The digest rule new receipts are written under.
+pub const DIGEST_VERSION: u8 = 1;
 
 pub const GENESIS: &str = "sha256:genesis";
 
@@ -132,16 +180,67 @@ pub enum JournalError {
         found: String,
         expected: String,
     },
+    #[error("{0} is already open for appending — another writer holds it")]
+    AlreadyOpen(String),
 }
 
 pub struct Chain {
     path: PathBuf,
     receipts: Vec<Receipt>,
+    /// Held for as long as this handle can append. `None` for a read-only view.
+    lock: Option<PathBuf>,
+}
+
+/// Released when the writer is dropped, including on a panic — so a crash costs
+/// a stale lock file at worst, which the next `open` reports rather than
+/// silently stepping over.
+impl Drop for Chain {
+    fn drop(&mut self) {
+        if let Some(lock) = &self.lock {
+            let _ = std::fs::remove_file(lock);
+        }
+    }
 }
 
 impl Chain {
+    /// Open for appending, exclusively.
+    ///
+    /// Two handles on one chain is not a race that shows up as a crash: each
+    /// computes `prev` from its own in-memory head, so the second writer forks
+    /// the links and the file stops verifying — quietly, after the fact. The
+    /// only prevention used to be that the window declined to poll during a run,
+    /// which is a convention, not a guarantee.
+    ///
+    /// The lock is a file created with `create_new`, which is atomic at the
+    /// filesystem: whoever wins, wins. Advisory in the sense that a process that
+    /// ignores it can still write — but every writer here goes through `Chain`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
         let path = path.as_ref().to_path_buf();
+        let lock = path.with_extension("lock");
+
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(JournalError::AlreadyOpen(path.display().to_string()));
+            }
+            Err(e) => return Err(e.into()),
+        }
+
+        let mut chain = Self::load(path)?;
+        chain.lock = Some(lock);
+        Ok(chain)
+    }
+
+    /// Read a chain without claiming it.
+    ///
+    /// Reading is always safe — the file is append-only, so the worst a reader
+    /// sees is a chain one entry shorter than it will be. Making a reader take
+    /// the lock would mean opening a session in the window could block a run.
+    pub fn inspect(path: impl AsRef<Path>) -> Result<Self, JournalError> {
+        Self::load(path.as_ref().to_path_buf())
+    }
+
+    fn load(path: PathBuf) -> Result<Self, JournalError> {
         let receipts = if path.exists() {
             std::fs::read_to_string(&path)?
                 .lines()
@@ -151,7 +250,7 @@ impl Chain {
         } else {
             Vec::new()
         };
-        let chain = Self { path, receipts };
+        let chain = Self { path, receipts, lock: None };
         chain.verify()?;
         Ok(chain)
     }
@@ -176,6 +275,7 @@ impl Chain {
             ts: now,
             event,
             evidence,
+            v: DIGEST_VERSION,
             digest: String::new(),
         };
         receipt.digest = digest_of(&receipt)?;
@@ -184,7 +284,9 @@ impl Chain {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(file, "{}", serde_json::to_string(&receipt)?)?;
+        // Written through `Value` for the same reason it is hashed that way: one
+        // entry per key, so the line on disk is what the digest was taken over.
+        writeln!(file, "{}", serde_json::to_value(&receipt)?)?;
         file.sync_all()?;
 
         self.receipts.push(receipt);
@@ -241,17 +343,34 @@ fn read_receipt(line: &str) -> Result<Receipt, serde_json::Error> {
 }
 
 /// Digest over the receipt with `digest` blanked, so the field can carry its own
-/// hash without circularity. Field order is serde's declaration order, which is
-/// stable across runs of the same binary.
+/// hash without circularity.
 ///
-/// TODO before this is load-bearing: a real canonical form (sorted keys, fixed
-/// number formatting), so a journal stays verifiable across serde versions.
+/// Two rules, chosen by the receipt's own `v`:
+///
+/// **v1 — canonical.** The receipt is turned into a JSON object first, then
+/// hashed. That does three things at once. Keys come out sorted, because
+/// `serde_json`'s map is a `BTreeMap` — so the hash no longer depends on the
+/// order fields happen to be declared in, and reordering a struct or upgrading
+/// serde can no longer invalidate a journal. The two flattened halves that both
+/// name `txn_id` collapse to one entry, so the bytes are a well-formed object
+/// rather than one with a repeated key. And every number in a receipt is an
+/// integer, which JSON writes exactly, so there is no float formatting to pin.
+///
+/// **v0 — legacy.** Receipts written before this rule existed are hashed the way
+/// they were written: serde's declaration order, straight off the struct. They
+/// keep verifying. Silently changing the rule would have invalidated every
+/// journal already on disk, which for a project whose claim is *recompute it
+/// yourself* would be the worst possible way to fix a correctness bug.
 fn digest_of(receipt: &Receipt) -> Result<String, JournalError> {
     let blanked = Receipt {
         digest: String::new(),
         ..receipt.clone()
     };
-    let bytes = serde_json::to_vec(&blanked)?;
+    let bytes = if blanked.v >= 1 {
+        serde_json::to_vec(&serde_json::to_value(&blanked)?)?
+    } else {
+        serde_json::to_vec(&blanked)?
+    };
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(&bytes))))
 }
 
@@ -303,8 +422,9 @@ mod tests {
         assert_eq!(chain.receipts()[1].prev, first);
         assert_eq!(chain.verify().unwrap(), 2);
 
-        // Reopening re-verifies from disk.
-        let reopened = Chain::open(&path).unwrap();
+        // Reopening re-verifies from disk. A read, so it does not take the lock
+        // the writer above is still holding.
+        let reopened = Chain::inspect(&path).unwrap();
         assert_eq!(reopened.receipts().len(), 2);
         let _ = std::fs::remove_file(&path);
     }

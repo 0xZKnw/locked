@@ -26,6 +26,9 @@ pub fn tool(id: &str, name: &str, input: serde_json::Value) -> serde_json::Value
     serde_json::json!({ "type": "tool_use", "id": id, "name": name, "input": input })
 }
 
+/// What the double answers when asked to compact a conversation.
+pub const SUMMARY: &str = "EARLIER: the agent wrote several files.";
+
 pub struct ScriptedLlm {
     turns: Mutex<std::collections::VecDeque<Vec<serde_json::Value>>>,
     /// Every request the loop made, in order. Lets a test assert what the model
@@ -58,6 +61,28 @@ impl LlmTransport for ScriptedLlm {
         req: InferenceRequest,
         sink: &dyn EventSink,
     ) -> Result<InferenceResponse, CoreError> {
+        // Reported as a function of what was actually sent, not a constant. A
+        // double that answers "100 tokens" no matter how long the conversation
+        // got would make compaction look either useless or permanent — the loop
+        // decides using this number, so it has to move the way a real one does.
+        let input_tokens = 20 * req.messages.len() as u64;
+
+        // A compaction asks the model to summarise, and it is the one request the
+        // loop makes with no tools at all. Answering it from the script would make
+        // every test's turn list depend on when compaction happened to fire, so it
+        // is answered here instead and the script is left alone.
+        if req.tools.is_empty() {
+            self.seen.lock().unwrap().push(req);
+            return Ok(InferenceResponse {
+                model: "scripted-1".into(),
+                content: serde_json::json!([{ "type": "text", "text": SUMMARY }]),
+                stop_reason: "end_turn".into(),
+                input_tokens,
+                cached_tokens: 0,
+                output_tokens: 10,
+            });
+        }
+
         self.seen.lock().unwrap().push(req);
 
         let blocks = self
@@ -82,7 +107,8 @@ impl LlmTransport for ScriptedLlm {
             model: "scripted-1".into(),
             content: serde_json::Value::Array(blocks),
             stop_reason: if wants_tools { "tool_use" } else { "end_turn" }.into(),
-            input_tokens: 100,
+            input_tokens,
+            cached_tokens: 0,
             output_tokens: 10,
         })
     }

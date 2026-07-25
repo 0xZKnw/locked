@@ -20,6 +20,7 @@
       tap_call: "Call through TAP",
       sandbox_call: "Sandbox",
       approval_resolved: "Human decision",
+      conversation_compacted: "Conversation shortened",
       run_finished: "Run closed",
     })[r.event] ?? r.event.replace(/_/g, " ");
 
@@ -32,7 +33,18 @@
       case "tap_call":
         return { lead: r.method, mono: r.target_host, trail: `via ${r.credential}` };
       case "inference":
-        return { mono: r.model, trail: `${r.input_tokens} in · ${r.output_tokens} out` };
+        return {
+          mono: r.model,
+          // What came back from the provider's cache is stated rather than
+          // folded into the total: the window read all of it, and only part of
+          // it was paid for at full price.
+          trail:
+            `${r.input_tokens} in` +
+            (r.cached_tokens ? ` (${r.cached_tokens} cached)` : "") +
+            ` · ${r.output_tokens} out`,
+        };
+      case "conversation_compacted":
+        return { trail: `${r.dropped} folded · ${r.kept} kept verbatim` };
       case "sandbox_call":
         return { mono: r.tool, trail: r.exit_code == null ? "" : `exit ${r.exit_code}` };
       case "run_started":

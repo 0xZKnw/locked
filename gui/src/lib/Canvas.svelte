@@ -35,6 +35,16 @@
   let big = $state(false);
 
   /**
+   * Whether the frame's own script ever ran.
+   *
+   * This cannot be tested from here — WebView2 is not scriptable from the test
+   * harness, and a CSP that silently blocked the inline script would look
+   * exactly like a page that draws nothing. So the page reports in, and a frame
+   * that never does says so instead of sitting there looking empty and correct.
+   */
+  let alive = $state(null);
+
+  /**
    * Escape closes it.
    *
    * A pane that takes the whole window has to be dismissable by the key everyone
@@ -75,11 +85,18 @@ ${code}
   );
 
   $effect(() => {
-    let alive = true;
+    let current = true;
+    alive = null;
     invoke("stage_canvas", { html: page })
-      .then((u) => alive && ((url = u), (error = null)))
-      .catch((e) => alive && (error = String(e)));
-    return () => (alive = false);
+      .then((u) => current && ((url = u), (error = null)))
+      .catch((e) => current && (error = String(e)));
+
+    // Generous: a slow first paint is not a failure. Silence past this is.
+    const giveUp = setTimeout(() => current && alive === null && (alive = false), 2500);
+    return () => {
+      current = false;
+      clearTimeout(giveUp);
+    };
   });
 
   /**
@@ -89,6 +106,7 @@ ${code}
   function onMessage(e) {
     if (!frame || e.source !== frame.contentWindow) return;
     if (e.data?.type !== "locked:canvas-height") return;
+    alive = true;
     const n = Number(e.data.value);
     if (Number.isFinite(n)) height = Math.max(120, Math.min(900, Math.round(n) + 2));
   }
@@ -103,7 +121,12 @@ ${code}
 
 <figure class="canvas" class:big>
   <div class="bar">
-    <span class="what">canvas <span class="sep">·</span> no network, no access to this window</span>
+    <span class="what">
+      canvas <span class="sep">·</span> no network, no access to this window
+      {#if alive === false}
+        <span class="stalled" title="The page loaded but its script never reported in — most likely the frame's policy blocked it.">· script did not run</span>
+      {/if}
+    </span>
     <div class="tabs">
       <button class:on={view === "preview"} onclick={() => (view = "preview")}>preview</button>
       <button class:on={view === "code"} onclick={() => (view = "code")}>code</button>
@@ -159,6 +182,9 @@ ${code}
   }
   /* The frame's limits are stated where you meet it, not buried in a doc. */
   .what { font-size: 10.5px; color: var(--ash); letter-spacing: 0.2px; }
+  /* A frame whose script never ran looks identical to one that drew nothing on
+     purpose. Saying so is the difference between a bug and a mystery. */
+  .stalled { color: var(--amber); }
   .sep { color: var(--stone); }
 
   .tabs { display: flex; gap: 2px; flex: 0 0 auto; }

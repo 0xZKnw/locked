@@ -1,0 +1,73 @@
+# Everything `scripts/check.sh` runs, on every push.
+#
+# The point is not coverage for its own sake. The project's whole claim is that
+# the loop cannot open a socket, and that claim is enforced by a script nobody
+# runs unless they remember to. Here it runs on Linux — which also gives the
+# non-Windows build the only real test it has ever had, since the app has only
+# ever been developed on one platform.
+name: check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Warnings are errors here, so a lint that a local build merely printed cannot
+  # ride into main unnoticed.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  invariant:
+    # Its own job, and the first one, because a suite that passes on a build
+    # where the loop can reach an HTTP stack is testing the wrong program. If
+    # this fails the rest of the answer does not matter.
+    name: egress invariant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: bash scripts/check-egress-isolation.sh
+
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Tauri needs system libraries on Linux; the GUI crate is part of the
+      # workspace, so a plain `cargo test --workspace` needs them present.
+      - name: system dependencies for the window
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets
+
+  window:
+    name: window
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+      - run: npx vite build

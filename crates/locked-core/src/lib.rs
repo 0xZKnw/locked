@@ -66,7 +66,17 @@ pub struct InferenceResponse {
     pub model: String,
     pub content: serde_json::Value,
     pub stop_reason: String,
+    /// Everything the model read this turn, cached or not.
+    ///
+    /// Not the same as the provider's `input_tokens`, which counts only what was
+    /// billed at full rate once a cached prefix is subtracted. The context gauge
+    /// asks "how full is the window", and the window does not care what a token
+    /// cost — so the cached prefix is added back in here, and what it saved is
+    /// reported separately.
     pub input_tokens: u64,
+    /// The part of `input_tokens` that came back from the provider's cache.
+    #[serde(default)]
+    pub cached_tokens: u64,
     pub output_tokens: u64,
 }
 
@@ -319,6 +329,10 @@ pub enum UiEvent {
     ApprovalPending { txn_id: String, summary: String },
     ApprovalResolved { txn_id: String, decision: String },
     ReceiptAppended { receipt: locked_journal::Receipt },
+    /// The conversation was shortened to keep fitting. Surfaced rather than done
+    /// quietly: the user is entitled to know when the agent stopped being able to
+    /// see what they said earlier.
+    Compacted { dropped: u32 },
     RunFinished { turns: u32 },
 }
 
@@ -358,8 +372,135 @@ pub struct Run<'a> {
     pending: Vec<String>,
     turn: u32,
     caps: Capabilities,
+    /// The model's context window, or 0 when nobody published one.
+    ///
+    /// Zero disables compaction rather than guessing a limit: shortening a
+    /// conversation against an invented number would throw away real context to
+    /// respect a constraint that may not exist.
+    context_window: u64,
+    /// What the provider said the last request cost to read. Measured, not
+    /// estimated — the loop does not tokenise, and a character-count heuristic
+    /// would be wrong by a different factor for prose, code and base64 images.
+    last_input_tokens: u64,
     now: fn() -> String,
 }
+
+const SUMMARY_PROMPT: &str = "You are compacting a conversation between a user \
+and an agent so that it fits in a smaller context. Write a summary that lets the \
+agent carry on without the original. Keep: what the user asked for and why, \
+decisions taken and rejected, facts established, file paths, names, identifiers \
+and numbers, and anything still outstanding. Drop pleasantries and restatement. \
+Prefer specifics over characterisation. Do not invent anything, and do not \
+address the user - you are writing a note to the agent.";
+
+/// Characters of transcript sent to be summarised.
+const MAX_TRANSCRIPT: usize = 120_000;
+
+/// Where the conversation can be cut without breaking it.
+///
+/// A tool result refers back to a tool call, and a request carrying one without
+/// the other is malformed — so the cut moves earlier until it lands somewhere
+/// that leaves every pair intact. Moving earlier only ever keeps more, so this
+/// terminates and can never orphan a call.
+///
+/// `None` means there is nothing worth folding.
+fn compaction_boundary(messages: &[Message]) -> Option<usize> {
+    if messages.len() <= KEEP_RECENT + 1 {
+        return None;
+    }
+    let mut split = messages.len() - KEEP_RECENT;
+    while split > 0 && carries_tool_result(&messages[split]) {
+        split -= 1;
+    }
+    (split >= MIN_FOLD).then_some(split)
+}
+
+fn carries_tool_result(message: &Message) -> bool {
+    let Message::User { content } = message else {
+        return false;
+    };
+    content
+        .as_array()
+        .is_some_and(|blocks| blocks.iter().any(|b| b["type"] == "tool_result"))
+}
+
+/// Flatten messages into something a model can read as a transcript.
+///
+/// Images become a placeholder rather than their bytes: re-sending a megabyte of
+/// base64 to be summarised would cost more than the turns it replaces.
+fn transcribe(messages: &[Message]) -> String {
+    let mut out = String::new();
+    for message in messages {
+        let (who, content) = match message {
+            Message::User { content } => ("user", content.clone()),
+            Message::Assistant { content } => ("agent", content.clone()),
+            Message::System { content } => ("operator", serde_json::json!(content)),
+        };
+        out.push_str(&format!("\n[{who}]\n"));
+
+        if let Some(text) = content.as_str() {
+            out.push_str(text);
+            out.push('\n');
+            continue;
+        }
+        for block in content.as_array().into_iter().flatten() {
+            match block["type"].as_str().unwrap_or_default() {
+                "text" => out.push_str(block["text"].as_str().unwrap_or_default()),
+                "image" => out.push_str("(image)"),
+                "thinking" => continue,
+                "tool_use" => out.push_str(&format!(
+                    "(called {} with {})",
+                    block["name"].as_str().unwrap_or("a tool"),
+                    truncate(&block["input"].to_string(), 400)
+                )),
+                "tool_result" => out.push_str(&format!(
+                    "(result: {})",
+                    truncate(&block["content"].to_string(), 800)
+                )),
+                other => out.push_str(&format!("({other})")),
+            }
+            out.push('\n');
+        }
+    }
+    // The summary request has to fit too. The tail is kept rather than the head,
+    // because the recent past is what the next turn is most likely about.
+    if out.len() > MAX_TRANSCRIPT {
+        let start = out.len() - MAX_TRANSCRIPT;
+        let start = (start..out.len())
+            .find(|i| out.is_char_boundary(*i))
+            .unwrap_or(out.len());
+        out = format!("(earlier turns omitted)\n{}", &out[start..]);
+    }
+    out
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    format!("{}...", text.chars().take(max).collect::<String>())
+}
+
+/// The fraction of the window at which the conversation is shortened.
+///
+/// Below the limit, with room left for the answer itself: compaction that only
+/// triggers once a request has already been refused is compaction that arrives
+/// one turn too late.
+const COMPACT_AT: f64 = 0.75;
+
+/// The smallest fold worth doing.
+///
+/// Compaction costs an inference and loses detail, so it has to buy more than it
+/// spends. Without a floor, a conversation sitting just over the line folds again
+/// every couple of turns — each one replacing a summary with a summary of a
+/// summary, which is how a chat quietly forgets everything it was about.
+const MIN_FOLD: usize = KEEP_RECENT;
+
+/// Turns kept verbatim after a compaction.
+///
+/// The recent past is what the next turn is usually about, so it survives as
+/// itself. Everything older becomes a summary.
+const KEEP_RECENT: usize = 6;
 
 impl<'a> Run<'a> {
     pub fn new(
@@ -379,10 +520,146 @@ impl<'a> Run<'a> {
             sink,
             messages: Vec::new(),
             pending: Vec::new(),
+            context_window: 0,
+            last_input_tokens: 0,
             turn: 0,
             caps,
             now,
         }
+    }
+
+    /// Tell the run how much window it has.
+    ///
+    /// Without this the conversation is never shortened, which is the right
+    /// default for a caller that does not know the limit: guessing one would mean
+    /// throwing away real context to respect a constraint that may not exist.
+    pub fn with_context_window(mut self, tokens: u64) -> Self {
+        self.context_window = tokens;
+        self
+    }
+
+    /// Shorten the conversation if it no longer comfortably fits.
+    ///
+    /// A long chat otherwise ends by failing — the request is refused for length
+    /// and the run stops mid-thought. The alternative is to fold the older part
+    /// into a summary and carry on, which loses detail but keeps going. This picks
+    /// the second, states it in the journal, and says so in the window.
+    ///
+    /// It runs on the measured size of the last request, not on an estimate. The
+    /// loop does not tokenise, and a character count would be wrong by a different
+    /// factor for prose, for code and for a base64 image.
+    async fn compact_if_needed(&mut self) -> Result<(), CoreError> {
+        if self.context_window == 0 {
+            return Ok(());
+        }
+        if (self.last_input_tokens as f64) < self.context_window as f64 * COMPACT_AT {
+            return Ok(());
+        }
+        let Some(split) = compaction_boundary(&self.messages) else {
+            // Everything left is either recent or structurally inseparable. There
+            // is nothing to fold, so the request goes out at its real size and the
+            // provider decides — better than dropping half a tool call to make a
+            // number look right.
+            return Ok(());
+        };
+
+        let before = locked_journal::digest_bytes(&serde_json::to_vec(&self.messages)?);
+        let earlier = self.messages[..split].to_vec();
+        let summary = self.summarize(&earlier).await?;
+
+        let mut kept = Vec::with_capacity(1 + self.messages.len() - split);
+        kept.push(Message::System {
+            content: format!(
+                "The earlier part of this conversation no longer fits in context and \
+                 has been replaced by this summary. Treat it as a record of what was \
+                 said, not as something the user typed, and say so if you are asked \
+                 about a detail it does not cover.\n\n{summary}"
+            ),
+        });
+        kept.extend_from_slice(&self.messages[split..]);
+
+        let dropped = split as u32;
+        let after = locked_journal::digest_bytes(&serde_json::to_vec(&kept)?);
+        self.messages = kept;
+        // Measured again on the next request. Until then the old figure describes a
+        // conversation that no longer exists.
+        self.last_input_tokens = 0;
+
+        self.record(
+            Event::ConversationCompacted {
+                dropped,
+                kept: (self.messages.len() - 1) as u32,
+                before_digest: before,
+                after_digest: after,
+            },
+            Evidence::HarnessAttested,
+        )?;
+        self.sink.emit(UiEvent::Compacted { dropped });
+        Ok(())
+    }
+
+    /// Fold a stretch of conversation into prose, through the same door.
+    ///
+    /// The transcript goes out as one block of text rather than as the messages
+    /// themselves: a slice can end on a tool call whose result is in the part we
+    /// are keeping, and a request carrying that dangling call is malformed. Text
+    /// has no such structure to break.
+    ///
+    /// It is an inference, so it gets an inference receipt like any other. A
+    /// summarisation that did not appear in the journal would be the one call the
+    /// model made that nobody could see.
+    async fn summarize(&mut self, earlier: &[Message]) -> Result<String, CoreError> {
+        let transcript = transcribe(earlier);
+        let response = self
+            .llm
+            .infer(
+                InferenceRequest {
+                    system: SUMMARY_PROMPT.to_string(),
+                    messages: vec![Message::User {
+                        content: serde_json::json!(transcript),
+                    }],
+                    tools: vec![],
+                    max_tokens: 1500,
+                },
+                // Silent: these deltas are bookkeeping, and streaming them into the
+                // transcript would look like the agent answering a question nobody
+                // asked.
+                &NullSink,
+            )
+            .await?;
+
+        self.record(
+            Event::Inference {
+                model: response.model.clone(),
+                prompt_digest: locked_journal::digest_bytes(transcript.as_bytes()),
+                response_digest: locked_journal::digest_bytes(&serde_json::to_vec(
+                    &response.content,
+                )?),
+                input_tokens: response.input_tokens,
+                cached_tokens: response.cached_tokens,
+                output_tokens: response.output_tokens,
+            },
+            Evidence::HarnessAttested,
+        )?;
+
+        let text = response
+            .content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(if text.trim().is_empty() {
+            // A summary that came back empty is still a fact worth carrying: it
+            // says the earlier turns are gone, which is the part the model most
+            // needs to know.
+            "(the summary came back empty - the earlier turns are no longer available)".into()
+        } else {
+            text
+        })
     }
 
     fn record(&mut self, event: Event, evidence: Evidence) -> Result<(), CoreError> {
@@ -453,6 +730,7 @@ impl<'a> Run<'a> {
         self.turn += 1;
         self.sink.emit(UiEvent::TurnStarted { turn: self.turn });
         self.drain_approvals().await?;
+        self.compact_if_needed().await?;
 
         let response = self
             .llm
@@ -480,6 +758,7 @@ impl<'a> Run<'a> {
                     &response.content,
                 )?),
                 input_tokens: response.input_tokens,
+                cached_tokens: response.cached_tokens,
                 output_tokens: response.output_tokens,
             },
             // Nobody but us witnessed the inference. Since the LLM left TAP, this
@@ -487,6 +766,7 @@ impl<'a> Run<'a> {
             // reads already carry, not a special case.
             Evidence::HarnessAttested,
         )?;
+        self.last_input_tokens = response.input_tokens;
 
         // Text reached the sink as deltas while it was being generated; emitting
         // the finished blocks here as well would print everything twice.
@@ -506,7 +786,32 @@ impl<'a> Run<'a> {
                 continue;
             }
             let id = block["id"].as_str().unwrap_or_default().to_string();
-            let call: ToolCall = serde_json::from_value(block.clone())?;
+
+            // A model that names an argument wrong gets told so and tries again.
+            // Ending the run here would be the harness deciding that a typo is
+            // unrecoverable — and it would leave the tool call unanswered, which
+            // makes the *next* request malformed on top of it. Every `tool_use`
+            // gets a `tool_result`, including the ones we could not read.
+            let call: ToolCall = match serde_json::from_value(block.clone()) {
+                Ok(call) => call,
+                Err(e) => {
+                    let name = block["name"].as_str().unwrap_or("tool").to_string();
+                    self.sink.emit(UiEvent::ToolStarted {
+                        name: name.clone(),
+                        summary: "arguments rejected".into(),
+                    });
+                    self.sink.emit(UiEvent::ToolFinished {
+                        name,
+                        is_error: true,
+                    });
+                    results.push(ToolResult::new(
+                        id,
+                        format!("the arguments did not match the tool's schema: {e}"),
+                        true,
+                    ));
+                    continue;
+                }
+            };
             results.push(self.dispatch(id, call).await?);
         }
         self.messages.push(Message::User {
@@ -797,5 +1102,137 @@ mod tests {
             "api.dune.com"
         );
         assert_eq!(host_of("/relative/path"), "");
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    fn user(text: &str) -> Message {
+        Message::User { content: serde_json::json!(text) }
+    }
+
+    fn result(id: &str) -> Message {
+        Message::User {
+            content: serde_json::json!([
+                { "type": "tool_result", "tool_use_id": id, "content": "done" }
+            ]),
+        }
+    }
+
+    fn call(id: &str) -> Message {
+        Message::Assistant {
+            content: serde_json::json!([
+                { "type": "tool_use", "id": id, "name": "fs_write", "input": { "path": "a" } }
+            ]),
+        }
+    }
+
+    fn agent(text: &str) -> Message {
+        Message::Assistant {
+            content: serde_json::json!([{ "type": "text", "text": text }]),
+        }
+    }
+
+    /// A short conversation is left alone. Folding six messages into a summary of
+    /// six messages costs an inference and buys nothing.
+    #[test]
+    fn a_short_conversation_is_not_worth_folding() {
+        let short: Vec<Message> = (0..KEEP_RECENT).map(|i| user(&i.to_string())).collect();
+        assert_eq!(compaction_boundary(&short), None);
+    }
+
+    /// The recent turns stay; everything before them goes.
+    #[test]
+    fn the_recent_turns_are_the_ones_kept() {
+        let long: Vec<Message> = (0..20)
+            .map(|i| {
+                if i % 2 == 0 {
+                    user(&i.to_string())
+                } else {
+                    agent(&i.to_string())
+                }
+            })
+            .collect();
+        assert_eq!(compaction_boundary(&long), Some(20 - KEEP_RECENT));
+    }
+
+    /// The one thing compaction must never do. A tool result names a tool call;
+    /// send the result without the call and the request is malformed, so the cut
+    /// walks backwards until both are on the same side of it.
+    #[test]
+    fn a_cut_never_separates_a_tool_call_from_its_result() {
+        // The boundary lands on a run of tool results, so it has to walk back past
+        // the call that produced them. Long enough that the fold is still worth
+        // doing after the walk-back, so this tests the boundary and not the floor.
+        let mut messages: Vec<Message> = (0..10).map(|i| user(&i.to_string())).collect();
+        messages.push(call("t1"));
+        for _ in 0..KEEP_RECENT {
+            messages.push(result("t1"));
+        }
+
+        let split = compaction_boundary(&messages).expect("there is something to fold");
+        assert!(
+            !carries_tool_result(&messages[split]),
+            "the kept side must not begin with an orphaned result"
+        );
+        // It walked back to the call itself, which is the first safe place.
+        assert!(matches!(&messages[split], Message::Assistant { .. }));
+    }
+
+    /// A conversation that is nothing but one tool call and its results has no
+    /// safe cut at all — and the right answer is to leave it whole and let the
+    /// provider judge, not to break it to hit a number.
+    #[test]
+    fn a_conversation_with_no_safe_cut_is_left_alone() {
+        let mut messages = vec![call("t1")];
+        for _ in 0..20 {
+            messages.push(result("t1"));
+        }
+        assert_eq!(compaction_boundary(&messages), None);
+    }
+
+    /// The transcript keeps what a summary would need and drops what it would only
+    /// pay for — a base64 image re-sent to be summarised costs more than the turns
+    /// it replaces.
+    #[test]
+    fn the_transcript_carries_substance_and_not_bytes() {
+        let messages = vec![
+            Message::User {
+                content: serde_json::json!([
+                    { "type": "text", "text": "look at this" },
+                    { "type": "image", "source": { "data": "AAAABBBBCCCC" } },
+                ]),
+            },
+            Message::Assistant {
+                content: serde_json::json!([
+                    { "type": "thinking", "thinking": "private reasoning" },
+                    { "type": "tool_use", "id": "t1", "name": "fs_write",
+                      "input": { "path": "notes.md" } },
+                ]),
+            },
+            Message::System { content: "operator note".into() },
+        ];
+        let text = transcribe(&messages);
+
+        assert!(text.contains("look at this"));
+        assert!(text.contains("fs_write"));
+        assert!(text.contains("notes.md"));
+        assert!(text.contains("operator note"));
+        assert!(text.contains("(image)"));
+        assert!(!text.contains("AAAABBBBCCCC"), "image bytes must not be re-sent");
+        assert!(!text.contains("private reasoning"), "thinking is not transcript");
+    }
+
+    /// Long transcripts are cut on a character boundary. Slicing a UTF-8 string at
+    /// an arbitrary byte index panics, and a summariser that crashes on an accented
+    /// word is worse than one that summarises badly.
+    #[test]
+    fn a_long_transcript_is_cut_without_splitting_a_character() {
+        let big = "éàü ".repeat(MAX_TRANSCRIPT);
+        let text = transcribe(&[user(&big)]);
+        assert!(text.len() <= MAX_TRANSCRIPT + 64);
+        assert!(text.starts_with("(earlier turns omitted)"));
     }
 }

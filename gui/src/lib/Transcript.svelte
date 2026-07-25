@@ -174,6 +174,16 @@
           <code title={item.txn_id}>{short(item.txn_id)}</code>
           <span>{item.decision}</span>
         </div>
+      {:else if item.kind === "compacted"}
+        <!-- A seam in the conversation, drawn as one: everything above it the
+             agent now knows only as a summary. -->
+        <div class="seam" in:fly|global={{ y: 6, duration: ms(QUICK), easing: ease }}>
+          <span class="rule" aria-hidden="true"></span>
+          <span class="seam-label">
+            {item.dropped} earlier {item.dropped === 1 ? "message" : "messages"} folded into a summary
+          </span>
+          <span class="rule" aria-hidden="true"></span>
+        </div>
       {:else if item.kind === "note"}
         <!-- An operator message replayed from a reopened chat. -->
         <div class="resolved">{item.text}</div>
@@ -279,6 +289,32 @@
 </div>
 
 <style>
+  /* The one place the transcript admits it lost something. Quiet, but a line
+     across the whole column — the conversation genuinely has two halves now. */
+  .seam {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 14px;
+  }
+  .seam .rule {
+    flex: 1 1 auto;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(20, 18, 14, 0.14) 30%,
+      rgba(20, 18, 14, 0.14) 70%,
+      transparent
+    );
+  }
+  .seam-label {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    letter-spacing: 0.2px;
+    color: var(--ash);
+  }
+
   .wrap { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; }
 
   /* The stage holds the space so the outgoing and incoming transcripts can share

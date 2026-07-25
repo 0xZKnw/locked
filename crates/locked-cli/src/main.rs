@@ -34,6 +34,12 @@ impl EventSink for StdoutSink {
             UiEvent::ApprovalPending { txn_id, .. } => {
                 println!("  \x1b[33m⏳ waiting on a human — {txn_id}\x1b[0m \x1b[2m(the run continues)\x1b[0m")
             }
+            // Said out loud, not swallowed: from here on the agent is working
+            // from a summary of what came before, and an answer that gets a
+            // detail wrong afterwards deserves that context.
+            UiEvent::Compacted { dropped } => println!(
+                "  [33m▤[0m [2m{dropped} earlier messages folded into a summary[0m"
+            ),
             UiEvent::ApprovalResolved { txn_id, decision } => {
                 println!("  \x1b[33m⏳\x1b[0m {txn_id} → {decision}")
             }

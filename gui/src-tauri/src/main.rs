@@ -264,7 +264,8 @@ fn load_session(id: String) -> Result<SessionView, String> {
 
     let journal = dir.join("journal.jsonl");
     let receipts = if journal.exists() {
-        Chain::open(&journal).map(|c| c.receipts().to_vec()).map_err(|e| e.to_string())?
+        // Read-only: opening a chat must never contend with a run that is writing.
+        Chain::inspect(&journal).map(|c| c.receipts().to_vec()).map_err(|e| e.to_string())?
     } else {
         Vec::new()
     };
@@ -304,7 +305,31 @@ async fn check_approval(session: String, txn_id: String) -> Result<String, Strin
     };
 
     let journal = dir.join("journal.jsonl");
-    let mut chain = Chain::open(&journal).map_err(|e| e.to_string())?;
+
+    // A run in this same chat holds the writer's lock for its whole duration, and
+    // an approval usually resolves while that run is still going — it is what the
+    // run is waiting on. So we wait for the chain rather than failing on it, and
+    // if the run is still working when we give up we report the approval as
+    // unresolved and let the next poll record it.
+    //
+    // Reporting it resolved without recording it would be the worse bug: the
+    // window would stop polling and the decision would never reach the journal.
+    let mut chain = None;
+    for _ in 0..20 {
+        match Chain::open(&journal) {
+            Ok(c) => {
+                chain = Some(c);
+                break;
+            }
+            Err(locked_journal::JournalError::AlreadyOpen(_)) => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let Some(mut chain) = chain else {
+        return Ok("pending".into());
+    };
 
     let already = chain.receipts().iter().any(|r| {
         matches!(&r.event, locked_journal::Event::ApprovalResolved { txn_id: t, .. } if *t == txn_id)
@@ -591,6 +616,7 @@ async fn run(
     let p = provider();
     let model = model_name();
     let llm = DirectLlm::new(p, model.clone(), llm_key(p)?).map_err(|e| e.to_string())?;
+    let window = context_window(&llm, &model).await;
 
     emit_shell(
         app,
@@ -606,14 +632,18 @@ async fn run(
             },
             journal: journal_path.display().to_string(),
             session: session.clone(),
-            context_window: context_window(&llm, &model).await,
+            context_window: window,
             provider: provider_name(p).to_string(),
             model,
         },
     );
 
     let sink = WindowSink(app.clone());
-    let mut run = Run::new(&llm, &tap, sandbox.as_ref(), chain, &sink, caps, now);
+    // The same number the gauge is drawn from. A run that shortened its
+    // conversation at a different threshold than the ring shows would be telling
+    // the user two things at once.
+    let mut run =
+        Run::new(&llm, &tap, sandbox.as_ref(), chain, &sink, caps, now).with_context_window(window);
     run.resume(prior);
     run.start_with(&task, &images).await.map_err(|e| e.to_string())?;
 

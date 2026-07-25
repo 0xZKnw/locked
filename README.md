@@ -64,9 +64,34 @@ leaks.
   under a CSP that blocks every remote origin; do not audit a dev window.
 - **Covert channels are out of scope** — timing, and the content of an otherwise
   legitimate request.
+- **A long chat is shortened, and the agent then works from a summary.** Past
+  about three quarters of the model's window, the older turns are folded into a
+  summary and the rest is kept verbatim. That is a loss, so it is recorded: a
+  `conversation_compacted` receipt pins the conversation going in and the one
+  coming out, and the transcript draws a line where it happened. An answer given
+  after that line was reasoned from a summary, not from what you actually said.
 
 A page that claimed an absolute here would be wrong, and the first careful reader
 would find the asterisk. Better to print it.
+
+### On prompt caching
+
+Every turn re-sends the whole conversation — that is how the Messages API works.
+Locked marks two cache breakpoints, the system prompt and the end of the
+conversation, so a provider that caches can charge a fraction to read the prefix
+back instead of recomputing it.
+
+Measured against Kimi on 2026-07-25: two identical requests reported 2560 tokens
+read from cache without `"stream": true`, and zero with it. So on Kimi this pays
+off on the TAP door, which buffers whole responses by design, and does nothing on
+the direct door, which streams. It costs nothing there either — the mark is
+accepted and ignored. Anthropic documents caching as working under streaming, and
+the same request body serves both providers, so the gap is in one provider rather
+than in the shape of the request.
+
+Receipts state what the window actually read and how much of it came back from
+cache, separately, because those are two different facts: the context filled up
+either way, only the bill differs.
 
 ## Receipts
 

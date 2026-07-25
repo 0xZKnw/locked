@@ -5,6 +5,12 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 // which is what makes the strict CSP in tauri.conf.json survivable.
 export default defineConfig({
   plugins: [svelte()],
+
+  // Under vitest, resolve Svelte to its browser build. Without this the
+  // components compile for the server, where lifecycle and effects do not exist
+  // — and a rendering test that cannot mount fails for a reason that has nothing
+  // to do with the component.
+  resolve: process.env.VITEST ? { conditions: ["browser"] } : {},
   clearScreen: false,
   server: { port: 5173, strictPort: true },
   build: { target: "esnext", assetsInlineLimit: 1024 * 1024 },
