@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/airlock-journal",
-    "crates/airlock-tools",
-    "crates/airlock-sandbox",
-    "crates/airlock-core",
-    "crates/airlock-egress",
-    "crates/airlock-cli",
+    "crates/locked-journal",
+    "crates/locked-tools",
+    "crates/locked-sandbox",
+    "crates/locked-core",
+    "crates/locked-egress",
+    "crates/locked-cli",
     "gui/src-tauri",
 ]
 
@@ -15,11 +15,11 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-airlock-journal = { path = "crates/airlock-journal" }
-airlock-tools   = { path = "crates/airlock-tools" }
-airlock-sandbox = { path = "crates/airlock-sandbox" }
-airlock-core    = { path = "crates/airlock-core" }
-airlock-egress  = { path = "crates/airlock-egress" }
+locked-journal = { path = "crates/locked-journal" }
+locked-tools   = { path = "crates/locked-tools" }
+locked-sandbox = { path = "crates/locked-sandbox" }
+locked-core    = { path = "crates/locked-core" }
+locked-egress  = { path = "crates/locked-egress" }
 
 async-trait = "0.1"
 serde       = { version = "1", features = ["derive"] }
@@ -28,7 +28,7 @@ sha2        = "0.10"
 hex         = "0.4"
 thiserror   = "2"
 time        = { version = "0.3", features = ["formatting", "macros"] }
-# `io-util` is used by airlock-sandbox for the write-over-stdin path. It only
+# `io-util` is used by locked-sandbox for the write-over-stdin path. It only
 # built before because another crate happened to enable it — building the
 # sandbox crate on its own exposed the missing declaration.
 tokio       = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "fs", "io-util"] }

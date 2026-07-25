@@ -35,7 +35,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 /** Emit an event exactly as the Rust side would, to every live subscriber. */
 function fire(payload) {
-  for (const h of [...handlers]) h({ event: "airlock://event", payload });
+  for (const h of [...handlers]) h({ event: "locked://event", payload });
 }
 
 /**

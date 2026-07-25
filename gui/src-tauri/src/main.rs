@@ -1,21 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! The window's backend. Wiring only, exactly like `airlock-cli`.
+//! The window's backend. Wiring only, exactly like `locked-cli`.
 //!
-//! It runs the same `airlock_core::Run` and forwards the same `UiEvent` stream —
+//! It runs the same `locked_core::Run` and forwards the same `UiEvent` stream —
 //! the loop has no idea a window exists. Swapping the front end for a TUI, or
 //! running headless, changes nothing here or in core.
 
-use airlock_core::{EventSink, Message, Run, UiEvent};
-use airlock_egress::{DirectLlm, LlmProvider, TapForwarder};
-use airlock_journal::Chain;
-use airlock_sandbox::{Isolation, SurfaceHint};
-use airlock_tools::Capabilities;
+use locked_core::{EventSink, Message, Run, UiEvent};
+use locked_egress::{DirectLlm, LlmProvider, TapForwarder};
+use locked_journal::Chain;
+use locked_sandbox::{Isolation, SurfaceHint};
+use locked_tools::Capabilities;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 
-const EVENT: &str = "airlock://event";
+const EVENT: &str = "locked://event";
 
 /// Forwards core's events into the webview. Emit failures are dropped on purpose:
 /// a closed window must never take the run down with it.
@@ -92,7 +92,7 @@ fn tap_key() -> Result<String, String> {
 }
 
 fn provider() -> LlmProvider {
-    match std::env::var("AIRLOCK_PROVIDER").as_deref() {
+    match std::env::var("LOCKED_PROVIDER").as_deref() {
         Ok("anthropic") => LlmProvider::Anthropic,
         _ => LlmProvider::Kimi,
     }
@@ -106,7 +106,7 @@ fn provider_name(p: LlmProvider) -> &'static str {
 }
 
 fn model_name() -> String {
-    std::env::var("AIRLOCK_MODEL").unwrap_or_else(|_| "k3".into())
+    std::env::var("LOCKED_MODEL").unwrap_or_else(|_| "k3".into())
 }
 
 /// How much context the model will take.
@@ -116,7 +116,7 @@ fn model_name() -> String {
 /// only the fallback for a provider that doesn't say, and the env var overrides
 /// both. A meter whose denominator you cannot check is decoration.
 async fn context_window(llm: &DirectLlm, model: &str) -> u64 {
-    if let Ok(n) = std::env::var("AIRLOCK_CONTEXT_WINDOW").unwrap_or_default().parse() {
+    if let Ok(n) = std::env::var("LOCKED_CONTEXT_WINDOW").unwrap_or_default().parse() {
         return n;
     }
     if let Some(n) = llm.context_length().await {
@@ -135,20 +135,20 @@ fn llm_key(p: LlmProvider) -> Result<String, String> {
         LlmProvider::Kimi => "KIMI_API_KEY",
         LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
     };
-    std::env::var("AIRLOCK_LLM_KEY")
+    std::env::var("LOCKED_LLM_KEY")
         .or_else(|_| std::env::var(fallback))
-        .map_err(|_| format!("set AIRLOCK_LLM_KEY in .env, or {fallback}"))
+        .map_err(|_| format!("set LOCKED_LLM_KEY in .env, or {fallback}"))
 }
 
-/// The project root — where `.env` and `.airlock/` live.
+/// The project root — where `.env` and `.locked/` live.
 ///
 /// In dev the binary sits under `target/debug`, so walk up until a `.env` or a
-/// `.airlock` shows up before falling back to the working directory.
+/// `.locked` shows up before falling back to the working directory.
 fn project_root() -> PathBuf {
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let start = dir.clone();
     for _ in 0..6 {
-        if dir.join(".env").exists() || dir.join(".airlock").exists() {
+        if dir.join(".env").exists() || dir.join(".locked").exists() {
             return dir;
         }
         if !dir.pop() {
@@ -162,7 +162,7 @@ fn project_root() -> PathBuf {
 // Sessions
 //
 // A chat and its receipt chain are the same object, so a session owns its own
-// journal: `.airlock/sessions/<id>/journal.jsonl`. Opening an old chat opens the
+// journal: `.locked/sessions/<id>/journal.jsonl`. Opening an old chat opens the
 // chain that belongs to it, and "verify" means something specific rather than
 // "verify everything this machine has ever done".
 //
@@ -185,12 +185,12 @@ struct SessionMeta {
 #[derive(Serialize)]
 struct SessionView {
     meta: SessionMeta,
-    receipts: Vec<airlock_journal::Receipt>,
+    receipts: Vec<locked_journal::Receipt>,
     messages: Vec<Message>,
 }
 
 fn sessions_dir() -> PathBuf {
-    project_root().join(".airlock").join("sessions")
+    project_root().join(".locked").join("sessions")
 }
 
 /// Ids arrive from the webview, and a front end is not a trust boundary: without
@@ -291,7 +291,7 @@ fn load_session(id: String) -> Result<SessionView, String> {
 /// links. The window enforces that; this is not safe to call concurrently.
 #[tauri::command]
 async fn check_approval(session: String, txn_id: String) -> Result<String, String> {
-    use airlock_core::{ApprovalState, Forwarder};
+    use locked_core::{ApprovalState, Forwarder};
 
     let dir = session_dir(&session)?;
     let tap = TapForwarder::new(tap_key()?).map_err(|e| e.to_string())?;
@@ -307,16 +307,16 @@ async fn check_approval(session: String, txn_id: String) -> Result<String, Strin
     let mut chain = Chain::open(&journal).map_err(|e| e.to_string())?;
 
     let already = chain.receipts().iter().any(|r| {
-        matches!(&r.event, airlock_journal::Event::ApprovalResolved { txn_id: t, .. } if *t == txn_id)
+        matches!(&r.event, locked_journal::Event::ApprovalResolved { txn_id: t, .. } if *t == txn_id)
     });
     if !already {
         chain
             .append(
-                airlock_journal::Event::ApprovalResolved {
+                locked_journal::Event::ApprovalResolved {
                     txn_id: txn_id.clone(),
                     decision: decision.to_string(),
                 },
-                airlock_journal::Evidence::TapAttested { txn_id },
+                locked_journal::Evidence::TapAttested { txn_id },
                 now(),
             )
             .map_err(|e| e.to_string())?;
@@ -335,8 +335,8 @@ fn delete_session(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn list_capabilities() -> Result<Vec<airlock_core::CredentialInfo>, String> {
-    use airlock_core::Forwarder;
+async fn list_capabilities() -> Result<Vec<locked_core::CredentialInfo>, String> {
+    use locked_core::Forwarder;
     let tap = TapForwarder::new(tap_key()?).map_err(|e| e.to_string())?;
     tap.discover().await.map_err(|e| e.to_string())
 }
@@ -363,8 +363,8 @@ fn isolation_label(isolation: &Isolation) -> Option<String> {
 fn surface_label(surface: SurfaceHint) -> Option<String> {
     match surface {
         SurfaceHint::Full => Some(
-            std::env::var("AIRLOCK_IMAGE")
-                .unwrap_or_else(|_| airlock_sandbox::DEFAULT_IMAGE.into()),
+            std::env::var("LOCKED_IMAGE")
+                .unwrap_or_else(|_| locked_sandbox::DEFAULT_IMAGE.into()),
         ),
         SurfaceHint::Files => Some("workspace".into()),
         SurfaceHint::TapOnly => None,
@@ -373,15 +373,15 @@ fn surface_label(surface: SurfaceHint) -> Option<String> {
 
 /// What tier a run would get, without starting one.
 async fn probe_surface() -> SurfaceHint {
-    let image = std::env::var("AIRLOCK_IMAGE").unwrap_or_default();
-    match std::env::var("AIRLOCK_SANDBOX")
+    let image = std::env::var("LOCKED_IMAGE").unwrap_or_default();
+    match std::env::var("LOCKED_SANDBOX")
         .unwrap_or_else(|_| if image == "NONE" { "none".into() } else { "auto".into() })
         .as_str()
     {
         "none" => SurfaceHint::TapOnly,
         "workspace" => SurfaceHint::Files,
         "container" => SurfaceHint::Full,
-        _ if airlock_sandbox::container_runtime_available().await => SurfaceHint::Full,
+        _ if locked_sandbox::container_runtime_available().await => SurfaceHint::Full,
         _ => SurfaceHint::Files,
     }
 }
@@ -405,11 +405,11 @@ async fn describe_run(session: String) -> Result<ShellEvent, String> {
     let llm = DirectLlm::new(p, model.clone(), llm_key(p)?).map_err(|e| e.to_string())?;
 
     Ok(ShellEvent::RunConfig {
-        tools: airlock_tools::tool_specs(caps).iter().map(|t| t.name.to_string()).collect(),
+        tools: locked_tools::tool_specs(caps).iter().map(|t| t.name.to_string()).collect(),
         sandbox: surface_label(surface),
-        integrity: match airlock_core::LlmTransport::integrity(&llm) {
-            airlock_journal::Integrity::Full => "full".into(),
-            airlock_journal::Integrity::Degraded { reason } => reason,
+        integrity: match locked_core::LlmTransport::integrity(&llm) {
+            locked_journal::Integrity::Full => "full".into(),
+            locked_journal::Integrity::Degraded { reason } => reason,
         },
         journal: session_dir(&session)?.join("journal.jsonl").display().to_string(),
         session,
@@ -501,7 +501,7 @@ const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/w
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_IMAGES: usize = 8;
 
-fn check_images(images: &[airlock_core::Image]) -> Result<(), String> {
+fn check_images(images: &[locked_core::Image]) -> Result<(), String> {
     if images.len() > MAX_IMAGES {
         return Err(format!("{} images is more than one turn can carry (max {MAX_IMAGES})", images.len()));
     }
@@ -534,7 +534,7 @@ async fn start_run(
     app: AppHandle,
     task: String,
     session: String,
-    images: Option<Vec<airlock_core::Image>>,
+    images: Option<Vec<locked_core::Image>>,
 ) {
     let images = images.unwrap_or_default();
     if let Err(message) = check_images(&images) {
@@ -552,10 +552,10 @@ async fn run(
     app: &AppHandle,
     task: String,
     session: String,
-    images: Vec<airlock_core::Image>,
+    images: Vec<locked_core::Image>,
 ) -> Result<(), String> {
-    let airlock_dir = project_root().join(".airlock");
-    std::fs::create_dir_all(&airlock_dir).map_err(|e| e.to_string())?;
+    let locked_dir = project_root().join(".locked");
+    std::fs::create_dir_all(&locked_dir).map_err(|e| e.to_string())?;
 
     let dir = session_dir(&session)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -572,9 +572,9 @@ async fn run(
     // The workspace belongs to the chat, not to the prompt. A fresh empty
     // directory per run would mean a file written in one message is gone by the
     // next — the same reasoning that gives a session its own journal.
-    let (sandbox, surface) = airlock_sandbox::open_best(dir.join("workspace"), &session)
+    let (sandbox, surface) = locked_sandbox::open_best(dir.join("workspace"), &session)
         .await
-        .map_err(|e| format!("{e} — set AIRLOCK_SANDBOX=workspace in .env to run without a container"))?;
+        .map_err(|e| format!("{e} — set LOCKED_SANDBOX=workspace in .env to run without a container"))?;
     let caps = caps_for(surface);
     let isolation = sandbox.isolation();
     let tap = TapForwarder::new(tap_key()?).map_err(|e| e.to_string())?;
@@ -582,11 +582,11 @@ async fn run(
     // One discovery per run. If TAP is unreachable the run should still start
     // and fail honestly at the first call, rather than refuse to begin.
     let creds = {
-        use airlock_core::Forwarder;
+        use locked_core::Forwarder;
         tap.discover().await.unwrap_or_default()
     };
 
-    let system = airlock_core::prompt::system(&isolation, &creds);
+    let system = locked_core::prompt::system(&isolation, &creds);
 
     let p = provider();
     let model = model_name();
@@ -595,14 +595,14 @@ async fn run(
     emit_shell(
         app,
         ShellEvent::RunConfig {
-            tools: airlock_tools::tool_specs(caps)
+            tools: locked_tools::tool_specs(caps)
                 .iter()
                 .map(|t| t.name.to_string())
                 .collect(),
             sandbox: isolation_label(&isolation),
-            integrity: match airlock_core::LlmTransport::integrity(&llm) {
-                airlock_journal::Integrity::Full => "full".into(),
-                airlock_journal::Integrity::Degraded { reason } => reason,
+            integrity: match locked_core::LlmTransport::integrity(&llm) {
+                locked_journal::Integrity::Full => "full".into(),
+                locked_journal::Integrity::Degraded { reason } => reason,
             },
             journal: journal_path.display().to_string(),
             session: session.clone(),
@@ -804,7 +804,7 @@ mod session_tests {
     /// disagree, a run offers something no one is enforcing.
     #[test]
     fn a_tier_never_offers_more_than_it_enforces() {
-        use airlock_tools::tool_specs;
+        use locked_tools::tool_specs;
 
         let full: Vec<_> = tool_specs(caps_for(SurfaceHint::Full)).iter().map(|t| t.name).collect();
         let files: Vec<_> = tool_specs(caps_for(SurfaceHint::Files)).iter().map(|t| t.name).collect();

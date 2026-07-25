@@ -1,14 +1,14 @@
 //! Wiring. This binary sees both sides and implements neither.
 //!
 //! It is the second and last crate allowed to reach an HTTP stack, and only
-//! because it constructs the clients that `airlock-egress` defines. Keep it
-//! boring: anything with a decision in it belongs in `airlock-core`.
+//! because it constructs the clients that `locked-egress` defines. Keep it
+//! boring: anything with a decision in it belongs in `locked-core`.
 
-use airlock_core::{EventSink, Run, UiEvent};
-use airlock_egress::{DirectLlm, LlmProvider, TapForwarder};
-use airlock_journal::Chain;
-use airlock_sandbox::SurfaceHint;
-use airlock_tools::Capabilities;
+use locked_core::{EventSink, Run, UiEvent};
+use locked_egress::{DirectLlm, LlmProvider, TapForwarder};
+use locked_journal::Chain;
+use locked_sandbox::SurfaceHint;
+use locked_tools::Capabilities;
 
 /// Prints as it goes. The Tauri window will consume the same event stream — core
 /// makes no assumption about who is rendering.
@@ -42,13 +42,13 @@ impl EventSink for StdoutSink {
                 // a reader must never have to guess which receipts a third party
                 // could corroborate.
                 let (mark, label) = match &receipt.evidence {
-                    airlock_journal::Evidence::TapAttested { txn_id } => {
+                    locked_journal::Evidence::TapAttested { txn_id } => {
                         ("\x1b[32m■\x1b[0m", format!("tap:{txn_id}"))
                     }
-                    airlock_journal::Evidence::SourceAttested { scheme, id } => {
+                    locked_journal::Evidence::SourceAttested { scheme, id } => {
                         ("\x1b[36m■\x1b[0m", format!("{scheme}:{id}"))
                     }
-                    airlock_journal::Evidence::HarnessAttested => {
+                    locked_journal::Evidence::HarnessAttested => {
                         ("\x1b[2m□\x1b[0m", "harness only".into())
                     }
                 };
@@ -71,7 +71,7 @@ fn now() -> String {
 }
 
 /// TAP key: the environment first, then `~/.tap/agent.json` — the same order the
-/// official helper uses, so Airlock works on a machine already set up for TAP
+/// official helper uses, so Locked works on a machine already set up for TAP
 /// without asking for the key a second time.
 ///
 /// The value may be several comma-separated keys; `/forward` accepts that and
@@ -96,9 +96,9 @@ fn llm_key(provider: LlmProvider) -> Result<String, String> {
         LlmProvider::Kimi => "KIMI_API_KEY",
         LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
     };
-    std::env::var("AIRLOCK_LLM_KEY")
+    std::env::var("LOCKED_LLM_KEY")
         .or_else(|_| std::env::var(fallback))
-        .map_err(|_| format!("set AIRLOCK_LLM_KEY or {fallback}"))
+        .map_err(|_| format!("set LOCKED_LLM_KEY or {fallback}"))
 }
 
 /// Load `.env` from the working directory into the process environment.
@@ -147,13 +147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let task = match std::env::args().nth(1) {
         Some(t) => t,
         None => {
-            eprintln!("usage: airlock \"<task>\"\n");
+            eprintln!("usage: locked \"<task>\"\n");
             eprintln!("  TAP_API_KEY       or ~/.tap/agent.json");
-            eprintln!("  AIRLOCK_LLM_KEY   or KIMI_API_KEY / ANTHROPIC_API_KEY");
-            eprintln!("  AIRLOCK_PROVIDER  kimi | anthropic          (default: kimi)");
-            eprintln!("  AIRLOCK_MODEL     (default: kimi-for-coding)");
-            eprintln!("  AIRLOCK_IMAGE     sandbox image; omit or set NONE to run without one");
-            eprintln!("  AIRLOCK_LLM_VIA_TAP  set to route inference through TAP too");
+            eprintln!("  LOCKED_LLM_KEY   or KIMI_API_KEY / ANTHROPIC_API_KEY");
+            eprintln!("  LOCKED_PROVIDER  kimi | anthropic          (default: kimi)");
+            eprintln!("  LOCKED_MODEL     (default: kimi-for-coding)");
+            eprintln!("  LOCKED_IMAGE     sandbox image; omit or set NONE to run without one");
+            eprintln!("  LOCKED_LLM_VIA_TAP  set to route inference through TAP too");
             std::process::exit(2);
         }
     };
@@ -164,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let run_id = std::process::id().to_string();
-    let root = std::env::current_dir()?.join(".airlock");
+    let root = std::env::current_dir()?.join(".locked");
     std::fs::create_dir_all(&root)?;
 
     // The journal lives OUTSIDE the workspace the sandbox mounts. That placement
@@ -178,9 +178,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The strongest sandbox this machine can actually provide, and the tool
     // surface that matches it. Chosen together: a tier and a capability set that
     // disagree is how a run ends up offering something nobody is enforcing.
-    let (sandbox, surface) = airlock_sandbox::open_best(root.join("workspaces").join(&run_id), &run_id)
+    let (sandbox, surface) = locked_sandbox::open_best(root.join("workspaces").join(&run_id), &run_id)
         .await
-        .map_err(|e| format!("{e} — set AIRLOCK_SANDBOX=workspace to run without a container"))?;
+        .map_err(|e| format!("{e} — set LOCKED_SANDBOX=workspace to run without a container"))?;
     let caps = match surface {
         SurfaceHint::TapOnly => Capabilities::TAP_ONLY,
         SurfaceHint::Files => Capabilities::FILES,
@@ -193,30 +193,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One discovery, then the prompt states what this run holds instead of
     // leaving the model to guess. Same prompt the window uses — it lives in core.
     let creds = {
-        use airlock_core::Forwarder;
+        use locked_core::Forwarder;
         tap.discover().await.unwrap_or_default()
     };
-    let system = airlock_core::prompt::system(&isolation, &creds);
+    let system = locked_core::prompt::system(&isolation, &creds);
 
-    let provider = match std::env::var("AIRLOCK_PROVIDER").as_deref() {
+    let provider = match std::env::var("LOCKED_PROVIDER").as_deref() {
         Ok("anthropic") => LlmProvider::Anthropic,
         _ => LlmProvider::Kimi,
     };
-    let model = std::env::var("AIRLOCK_MODEL").unwrap_or_else(|_| "k3".into());
+    let model = std::env::var("LOCKED_MODEL").unwrap_or_else(|_| "k3".into());
 
     // Two doors, and the choice is explicit rather than inferred.
     //
-    // `AIRLOCK_LLM_VIA_TAP` routes inference through TAP as well, which restores
+    // `LOCKED_LLM_VIA_TAP` routes inference through TAP as well, which restores
     // the full invariant — one door, no key held locally, inferences inside the
     // receipt chain. It requires the credential to auto-approve the inference
     // route, and it inherits TAP's 30-second ceiling, so it suits short turns.
-    let via_tap = std::env::var("AIRLOCK_LLM_VIA_TAP").is_ok();
+    let via_tap = std::env::var("LOCKED_LLM_VIA_TAP").is_ok();
     let direct;
     let through_tap;
-    let llm: &dyn airlock_core::LlmTransport = if via_tap {
-        through_tap = airlock_egress::TapLlm {
+    let llm: &dyn locked_core::LlmTransport = if via_tap {
+        through_tap = locked_egress::TapLlm {
             forwarder: &tap,
-            credential: std::env::var("AIRLOCK_LLM_CREDENTIAL")
+            credential: std::env::var("LOCKED_LLM_CREDENTIAL")
                 .unwrap_or_else(|_| "kimi".into()),
             provider,
             model: model.clone(),
@@ -228,8 +228,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!(
-        "\x1b[2mairlock — {} tools, isolation: {}\x1b[0m",
-        airlock_tools::tool_specs(caps).len(),
+        "\x1b[2mlocked — {} tools, isolation: {}\x1b[0m",
+        locked_tools::tool_specs(caps).len(),
         isolation.label()
     );
 

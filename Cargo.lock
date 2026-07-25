@@ -18,96 +18,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "airlock-cli"
-version = "0.1.0"
-dependencies = [
- "airlock-core",
- "airlock-egress",
- "airlock-journal",
- "airlock-sandbox",
- "airlock-tools",
- "serde_json",
- "time",
- "tokio",
-]
-
-[[package]]
-name = "airlock-core"
-version = "0.1.0"
-dependencies = [
- "airlock-journal",
- "airlock-sandbox",
- "airlock-tools",
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
-name = "airlock-egress"
-version = "0.1.0"
-dependencies = [
- "airlock-core",
- "async-trait",
- "futures-util",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
-name = "airlock-gui"
-version = "0.1.0"
-dependencies = [
- "airlock-core",
- "airlock-egress",
- "airlock-journal",
- "airlock-sandbox",
- "airlock-tools",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "time",
- "tokio",
-]
-
-[[package]]
-name = "airlock-journal"
-version = "0.1.0"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.19",
- "time",
-]
-
-[[package]]
-name = "airlock-sandbox"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
-name = "airlock-tools"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1864,6 +1774,96 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
+]
+
+[[package]]
+name = "locked-cli"
+version = "0.1.0"
+dependencies = [
+ "locked-core",
+ "locked-egress",
+ "locked-journal",
+ "locked-sandbox",
+ "locked-tools",
+ "serde_json",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "locked-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "locked-journal",
+ "locked-sandbox",
+ "locked-tools",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "locked-egress"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "locked-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "locked-gui"
+version = "0.1.0"
+dependencies = [
+ "locked-core",
+ "locked-egress",
+ "locked-journal",
+ "locked-sandbox",
+ "locked-tools",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "locked-journal"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+]
+
+[[package]]
+name = "locked-sandbox"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "locked-tools"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 {
-  "name": "airlock-gui",
+  "name": "locked-gui",
   "private": true,
   "type": "module",
   "scripts": {

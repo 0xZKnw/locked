@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * The window is a pure consumer of the event stream `airlock-core` emits.
+ * The window is a pure consumer of the event stream `locked-core` emits.
  * It holds no agent logic and makes no decisions — which is why swapping it for
  * a terminal front end, or running headless, changes nothing in the loop.
  */
@@ -266,7 +266,7 @@ export async function boot() {
     frame = null;
   }
 
-  const off = await listen("airlock://event", (msg) => handle(msg.payload));
+  const off = await listen("locked://event", (msg) => handle(msg.payload));
 
   // `listen` is async, so two boots can overlap: whoever started last wins and
   // the older subscription is dropped rather than left running alongside.

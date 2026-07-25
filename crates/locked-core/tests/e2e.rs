@@ -13,10 +13,10 @@
 
 mod harness;
 
-use airlock_core::{ApprovalState, ForwardOutcome, Message, Run, UiEvent};
-use airlock_journal::{Chain, Evidence, Event};
-use airlock_sandbox::{Isolation, LocalWorkspace, NoSandbox, Sandbox};
-use airlock_tools::Capabilities;
+use locked_core::{ApprovalState, ForwardOutcome, Message, Run, UiEvent};
+use locked_journal::{Chain, Evidence, Event};
+use locked_sandbox::{Isolation, LocalWorkspace, NoSandbox, Sandbox};
+use locked_tools::Capabilities;
 use harness::*;
 
 const SYSTEM: &str = "test system prompt";
@@ -538,11 +538,11 @@ async fn streamed_text_is_not_repeated_at_the_end_of_a_turn() {
 async fn the_prompt_states_the_tier_and_the_real_inventory() {
     let tap = ScriptedTap::empty();
     let creds = {
-        use airlock_core::Forwarder;
+        use locked_core::Forwarder;
         tap.discover().await.unwrap()
     };
 
-    let container = airlock_core::prompt::system(
+    let container = locked_core::prompt::system(
         &Isolation::Container { image: "python:3.12-slim".into() },
         &creds,
     );
@@ -550,11 +550,11 @@ async fn the_prompt_states_the_tier_and_the_real_inventory() {
     assert!(container.contains("dune"));
     assert!(container.contains("writes pause for a human"));
 
-    let workspace = airlock_core::prompt::system(&Isolation::Workspace, &creds);
+    let workspace = locked_core::prompt::system(&Isolation::Workspace, &creds);
     assert!(workspace.contains("There is no shell on this run"));
     assert!(!workspace.contains("no network stack at all"));
 
-    let bare = airlock_core::prompt::system(&Isolation::None, &[]);
+    let bare = locked_core::prompt::system(&Isolation::None, &[]);
     assert!(bare.contains("no shell"));
     assert!(
         bare.contains("no credentials at all"),

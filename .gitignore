@@ -5,7 +5,7 @@
 !.env.example
 
 /target
-/.airlock
+/.locked
 
 # Tauri / Svelte
 /gui/node_modules

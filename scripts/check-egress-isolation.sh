@@ -2,7 +2,7 @@
 #
 # The pitch, expressed as a build failure.
 #
-# Airlock claims that the crates which run the agent loop, execute its tools and
+# Locked claims that the crates which run the agent loop, execute its tools and
 # drive its sandbox *cannot* open a socket. That claim is worth exactly as much
 # as this script: it checks the dependency graph, so the property holds by
 # construction rather than by discipline, and a future commit that quietly adds
@@ -14,13 +14,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Crates that must have no path to any HTTP stack, transitive included.
-NET_FREE=(airlock-journal airlock-tools airlock-sandbox airlock-core)
+NET_FREE=(locked-journal locked-tools locked-sandbox locked-core)
 
-# Crates permitted to reach reqwest. `airlock-egress` implements the two doors;
-# `airlock-cli` and `airlock-gui` are front ends that construct those clients and
+# Crates permitted to reach reqwest. `locked-egress` implements the two doors;
+# `locked-cli` and `locked-gui` are front ends that construct those clients and
 # implement neither. Every entry here is a reviewed decision — the point of the
 # list is that adding one is visible in a diff.
-ALLOWED_HTTP_REACH=(airlock-egress airlock-cli airlock-gui)
+ALLOWED_HTTP_REACH=(locked-egress locked-cli locked-gui)
 
 HTTP_STACKS='^(reqwest|hyper|hyper-util|ureq|isahc|surf|attohttpc|curl|curl-sys|h2|tonic) '
 
@@ -48,14 +48,14 @@ done
 # 2. Only the allowed crates may depend on reqwest.
 # ---------------------------------------------------------------------------
 reachers=$(cargo tree -i reqwest --edges normal --prefix none 2>/dev/null \
-           | awk '{print $1}' | sort -u | grep '^airlock-' || true)
+           | awk '{print $1}' | sort -u | grep '^locked-' || true)
 
 while read -r crate; do
     [[ -z "$crate" ]] && continue
     if [[ ! " ${ALLOWED_HTTP_REACH[*]} " =~ " ${crate} " ]]; then
         fail "$crate depends on reqwest but is not in ALLOWED_HTTP_REACH.
 
-  Airlock's central claim is that every network-capable line lives in one crate.
+  Locked's central claim is that every network-capable line lives in one crate.
   Adding another is allowed — but it must be a deliberate, reviewed decision,
   recorded here and in the README."
     fi

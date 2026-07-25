@@ -1,16 +1,16 @@
 [package]
-name = "airlock-cli"
+name = "locked-cli"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
 # Wiring only. Sees both sides, implements neither.
 [dependencies]
-airlock-core.workspace = true
-airlock-egress.workspace = true
-airlock-journal.workspace = true
-airlock-sandbox.workspace = true
-airlock-tools.workspace = true
+locked-core.workspace = true
+locked-egress.workspace = true
+locked-journal.workspace = true
+locked-sandbox.workspace = true
+locked-tools.workspace = true
 serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true

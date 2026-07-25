@@ -2,7 +2,7 @@
 //!
 //! This crate is deliberately small and deliberately dependency-free. It defines
 //! *what the model may ask for* — nothing here executes anything, and nothing
-//! here can open a socket. Dispatch lives in `airlock-core`.
+//! here can open a socket. Dispatch lives in `locked-core`.
 //!
 //! The list below is the whole surface. There is no `web_fetch`, no `web_search`,
 //! no general-purpose HTTP tool. If the agent wants a web page it goes through a

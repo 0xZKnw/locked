@@ -1,19 +1,19 @@
 [package]
-name = "airlock-gui"
+name = "locked-gui"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
-# Like airlock-cli, this is wiring: it constructs the clients that airlock-egress
+# Like locked-cli, this is wiring: it constructs the clients that locked-egress
 # defines and forwards core's event stream to the window. It therefore reaches
 # reqwest transitively and is listed in ALLOWED_HTTP_REACH in
 # scripts/check-egress-isolation.sh — a deliberate, reviewed entry, not a drift.
 [dependencies]
-airlock-core.workspace = true
-airlock-egress.workspace = true
-airlock-journal.workspace = true
-airlock-sandbox.workspace = true
-airlock-tools.workspace = true
+locked-core.workspace = true
+locked-egress.workspace = true
+locked-journal.workspace = true
+locked-sandbox.workspace = true
+locked-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

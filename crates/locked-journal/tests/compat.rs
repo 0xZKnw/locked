@@ -6,7 +6,7 @@
 //! `skip_serializing_if` — this file is here so they find that out in a second
 //! rather than from a user whose history stopped verifying.
 
-use airlock_journal::{Chain, Evidence, Event, Integrity, JournalError};
+use locked_journal::{Chain, Evidence, Event, Integrity, JournalError};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let p = std::env::temp_dir()
@@ -28,7 +28,7 @@ fn a_journal_written_before_a_field_existed_still_verifies() {
     // round-tripping it through the current types. If `isolation` were to
     // serialize when empty, this would produce a different digest and the
     // assertion below would catch it.
-    let mut receipt: airlock_journal::Receipt =
+    let mut receipt: locked_journal::Receipt =
         serde_json::from_str(&legacy.replace("PLACEHOLDER", "sha256:x")).unwrap();
     receipt.digest = String::new();
     let reserialized = serde_json::to_string(&receipt).unwrap();

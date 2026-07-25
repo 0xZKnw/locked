@@ -2,7 +2,7 @@
 //! into it.
 //!
 //! Note the dependency direction: **core owns the transport traits, and
-//! `airlock-egress` implements them.** If core depended on egress instead, it
+//! `locked-egress` implements them.** If core depended on egress instead, it
 //! would inherit `reqwest` transitively and the loop — the thing that decides
 //! what happens — would sit in a crate that can open sockets. Inverting it keeps
 //! every network-capable line in one crate plus forty lines of wiring in the
@@ -12,18 +12,18 @@
 //! `EventSink`; a TUI, the Tauri window, or a test collector all consume the
 //! same stream.
 
-use airlock_journal::{Chain, Evidence, Event};
+use locked_journal::{Chain, Evidence, Event};
 
 /// Re-exported so an implementer of [`LlmTransport`] only needs to know about
 /// the crate that defines the trait.
-pub use airlock_journal::Integrity;
-use airlock_sandbox::Sandbox;
-use airlock_tools::{Capabilities, ToolCall, ToolResult, tool_specs};
+pub use locked_journal::Integrity;
+use locked_sandbox::Sandbox;
+use locked_tools::{Capabilities, ToolCall, ToolResult, tool_specs};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Transport traits — implemented in airlock-egress
+// Transport traits — implemented in locked-egress
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Clone, Debug)]
@@ -151,7 +151,7 @@ pub trait Forwarder: Send + Sync {
 
 pub mod prompt {
     use super::CredentialInfo;
-    use airlock_sandbox::Isolation;
+    use locked_sandbox::Isolation;
 
     pub const BASE: &str = "\
 You are the agent inside Locked — a harness whose whole claim is that every \
@@ -318,7 +318,7 @@ pub enum UiEvent {
     ToolFinished { name: String, is_error: bool },
     ApprovalPending { txn_id: String, summary: String },
     ApprovalResolved { txn_id: String, decision: String },
-    ReceiptAppended { receipt: airlock_journal::Receipt },
+    ReceiptAppended { receipt: locked_journal::Receipt },
     RunFinished { turns: u32 },
 }
 
@@ -337,9 +337,9 @@ pub enum CoreError {
     #[error("transport: {0}")]
     Transport(String),
     #[error("journal: {0}")]
-    Journal(#[from] airlock_journal::JournalError),
+    Journal(#[from] locked_journal::JournalError),
     #[error("sandbox: {0}")]
-    Sandbox(#[from] airlock_sandbox::SandboxError),
+    Sandbox(#[from] locked_sandbox::SandboxError),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
 }
@@ -411,7 +411,7 @@ impl<'a> Run<'a> {
                 integrity: self.llm.integrity(),
                 tools: tool_specs(self.caps).iter().map(|t| t.name.to_string()).collect(),
                 sandbox_image: match &isolation {
-                    airlock_sandbox::Isolation::Container { image } => Some(image.clone()),
+                    locked_sandbox::Isolation::Container { image } => Some(image.clone()),
                     _ => None,
                 },
                 isolation: isolation.label(),
@@ -473,10 +473,10 @@ impl<'a> Run<'a> {
         self.record(
             Event::Inference {
                 model: response.model.clone(),
-                prompt_digest: airlock_journal::digest_bytes(
+                prompt_digest: locked_journal::digest_bytes(
                     &serde_json::to_vec(&self.messages)?,
                 ),
-                response_digest: airlock_journal::digest_bytes(&serde_json::to_vec(
+                response_digest: locked_journal::digest_bytes(&serde_json::to_vec(
                     &response.content,
                 )?),
                 input_tokens: response.input_tokens,
@@ -677,8 +677,8 @@ impl<'a> Run<'a> {
                         self.record(
                             Event::SandboxCall {
                                 tool: "fs_write".into(),
-                                args_digest: airlock_journal::digest_bytes(path.as_bytes()),
-                                result_digest: airlock_journal::digest_bytes(contents.as_bytes()),
+                                args_digest: locked_journal::digest_bytes(path.as_bytes()),
+                                result_digest: locked_journal::digest_bytes(contents.as_bytes()),
                                 exit_code: None,
                             },
                             Evidence::HarnessAttested,
@@ -704,8 +704,8 @@ impl<'a> Run<'a> {
                     self.record(
                         Event::SandboxCall {
                             tool: "exec".into(),
-                            args_digest: airlock_journal::digest_bytes(command.as_bytes()),
-                            result_digest: airlock_journal::digest_bytes(combined.as_bytes()),
+                            args_digest: locked_journal::digest_bytes(command.as_bytes()),
+                            result_digest: locked_journal::digest_bytes(combined.as_bytes()),
                             exit_code: out.exit_code,
                         },
                         Evidence::HarnessAttested,

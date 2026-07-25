@@ -6,7 +6,7 @@
 //! asked, because half the properties worth asserting are about the request, not
 //! the reply — what tools the model was shown, what target reached TAP.
 
-use airlock_core::{
+use locked_core::{
     ApprovalState, CoreError, CredentialInfo, EventSink, ForwardCall, ForwardOutcome, Forwarder,
     InferenceRequest, InferenceResponse, Integrity, LlmTransport, UiEvent,
 };

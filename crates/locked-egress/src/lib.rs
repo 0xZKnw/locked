@@ -1,8 +1,8 @@
 //! **The only crate in the workspace with an HTTP client.**
 //!
 //! Enforced, not asserted: `scripts/check-egress-isolation.sh` fails CI if
-//! `reqwest` (or any other HTTP stack) becomes reachable from `airlock-core`,
-//! `airlock-tools`, `airlock-sandbox`, or `airlock-journal`. You can therefore
+//! `reqwest` (or any other HTTP stack) becomes reachable from `locked-core`,
+//! `locked-tools`, `locked-sandbox`, or `locked-journal`. You can therefore
 //! establish that the loop, the tool executor and the sandbox driver cannot open
 //! a socket by reading a dependency graph, without reading their logic.
 //!
@@ -20,7 +20,7 @@
 //! Neither client takes a URL from a caller. Hosts are constants; a method
 //! signature never carries a target the agent could influence.
 
-use airlock_core::{
+use locked_core::{
     ApprovalState, CoreError, CredentialInfo, EventSink, ForwardCall, ForwardOutcome, Forwarder,
     InferenceRequest, InferenceResponse, Integrity, LlmTransport,
 };
@@ -513,12 +513,12 @@ impl SseAccumulator {
                     "text_delta" => {
                         let t = d["text"].as_str().unwrap_or_default();
                         self.slot(index).text.push_str(t);
-                        sink.emit(airlock_core::UiEvent::AssistantDelta { text: t.into() });
+                        sink.emit(locked_core::UiEvent::AssistantDelta { text: t.into() });
                     }
                     "thinking_delta" => {
                         let t = d["thinking"].as_str().unwrap_or_default();
                         self.slot(index).text.push_str(t);
-                        sink.emit(airlock_core::UiEvent::ThinkingDelta { text: t.into() });
+                        sink.emit(locked_core::UiEvent::ThinkingDelta { text: t.into() });
                     }
                     // Tool inputs stream as JSON fragments; they are only valid
                     // once the block closes, so nothing is emitted here.

@@ -20,11 +20,11 @@
 
   // The rail's state outlives the window: reopening to a layout you didn't
   // choose is the kind of small betrayal that makes an app feel careless.
-  let open = $state(localStorage.getItem("airlock.rail") !== "closed");
+  let open = $state(localStorage.getItem("locked.rail") !== "closed");
 
   function toggleRail() {
     open = !open;
-    localStorage.setItem("airlock.rail", open ? "open" : "closed");
+    localStorage.setItem("locked.rail", open ? "open" : "closed");
   }
 
   onMount(() => {
@@ -186,7 +186,7 @@
           </span>
           <span
             class="seg ctx {pressure}"
-            title="{used.toLocaleString()} of {window_.toLocaleString()} tokens carried by the last inference. The window is a declared assumption — override it with AIRLOCK_CONTEXT_WINDOW."
+            title="{used.toLocaleString()} of {window_.toLocaleString()} tokens carried by the last inference. The window is a declared assumption — override it with LOCKED_CONTEXT_WINDOW."
           >
             <Gauge {fraction} />
             <!-- One flex item, or the row gap opens between the count and the

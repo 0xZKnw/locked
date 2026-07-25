@@ -121,7 +121,7 @@ fn confine(path: &str) -> Result<&str, SandboxError> {
 ///
 /// This is *not* "the sandbox, disabled". A run wired with this one is not
 /// offered `exec` or the `fs_*` tools in the first place — see
-/// `airlock_tools::Capabilities`. The agent's power is reduced to calling
+/// `locked_tools::Capabilities`. The agent's power is reduced to calling
 /// credentials it does not hold, which is a legitimate way to run and the
 /// project's first milestone.
 ///
@@ -316,7 +316,7 @@ impl DockerSandbox {
     /// than the individual run: a chat that writes a file in one message and
     /// reads it back in the next needs the same box both times.
     pub async fn start(spec: SandboxSpec, id: &str) -> Result<Self, SandboxError> {
-        let container = format!("airlock-{id}");
+        let container = format!("locked-{id}");
         let workspace = spec
             .workspace
             .to_str()
@@ -480,10 +480,10 @@ pub const DEFAULT_IMAGE: &str = "python:3.12-slim";
 /// this project makes. So when the container is unavailable the guarantee is
 /// kept and the capability is dropped.
 ///
-/// `AIRLOCK_SANDBOX` pins the tier — `auto` (default), `container`, `workspace`,
+/// `LOCKED_SANDBOX` pins the tier — `auto` (default), `container`, `workspace`,
 /// `none`. Asking for `container` explicitly is an error if it is unavailable,
 /// because a silent downgrade of something you asked for by name is worse than a
-/// refusal. `AIRLOCK_IMAGE=NONE` is still honoured as the older spelling of
+/// refusal. `LOCKED_IMAGE=NONE` is still honoured as the older spelling of
 /// `none`.
 ///
 /// Returns the sandbox and the tool surface that matches it. They are chosen
@@ -493,8 +493,8 @@ pub async fn open_best(
     workspace: PathBuf,
     container_id: &str,
 ) -> Result<(Box<dyn Sandbox>, SurfaceHint), SandboxError> {
-    let image = std::env::var("AIRLOCK_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.into());
-    let requested = std::env::var("AIRLOCK_SANDBOX").unwrap_or_else(|_| {
+    let image = std::env::var("LOCKED_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.into());
+    let requested = std::env::var("LOCKED_SANDBOX").unwrap_or_else(|_| {
         if image == "NONE" { "none".into() } else { "auto".into() }
     });
 
@@ -536,7 +536,7 @@ pub async fn open_best(
 
 /// Which tool surface a chosen sandbox can honour.
 ///
-/// Deliberately not `airlock_tools::Capabilities` — this crate does not depend on
+/// Deliberately not `locked_tools::Capabilities` — this crate does not depend on
 /// that one, and inverting it would put the tool list downstream of the sandbox.
 /// The binaries map this onto the real capability set.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -605,7 +605,7 @@ mod tests {
     /// the whole defence. A symlink is the case a textual check cannot see.
     #[tokio::test]
     async fn local_workspace_refuses_to_leave_its_root() {
-        let root = std::env::temp_dir().join(format!("airlock-ws-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("locked-ws-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ws = LocalWorkspace::open(root.clone()).unwrap();
 

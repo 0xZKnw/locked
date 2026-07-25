@@ -264,7 +264,7 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        std::env::temp_dir().join(format!("airlock-test-{}.jsonl", std::process::id()))
+        std::env::temp_dir().join(format!("locked-test-{}.jsonl", std::process::id()))
     }
 
     #[test]
