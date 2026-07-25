@@ -1,0 +1,19 @@
+[package]
+name = "airlock-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# NO NETWORK DEPENDENCY. core OWNS the transport traits; egress implements them.
+# This inversion is what keeps reqwest out of the loop, the tools and the sandbox.
+[dependencies]
+airlock-journal.workspace = true
+airlock-tools.workspace = true
+airlock-sandbox.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

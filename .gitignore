@@ -1,0 +1,13 @@
+# Secrets. The whole project is about not leaking credentials; losing one to a
+# commit would be an unusually embarrassing way to fail.
+.env
+.env.*
+!.env.example
+
+/target
+/.airlock
+
+# Tauri / Svelte
+/gui/node_modules
+/gui/dist
+/gui/src-tauri/target

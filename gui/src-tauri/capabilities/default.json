@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The window listens to the run's event stream and invokes the three read/act commands. Nothing else is granted.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

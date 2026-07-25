@@ -1,0 +1,404 @@
+/* ---------------------------------------------------------------------------
+   Airlock design tokens.
+
+   Light ground with an aurora. The palette lives entirely in these custom
+   properties, so the whole app follows from this block — the components never
+   name a colour directly.
+
+   The aurora is not decoration: it is the only chromatic element in the design,
+   and everything else is achromatic so it has room to be the one bold thing.
+   It is anchored to the top and dissolves into white well before the content
+   starts, so nothing is ever read against a gradient.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --canvas: #ffffff;
+  --s1: #faf9f8;
+  --s2: #f3f2f0;
+  --s3: #e9e7e4;
+
+  --ink: #16150f;
+  --body: #3f3d38;
+  --mute: #6f6c66;
+  --ash: #97938c;
+  --stone: #c4c0b9;
+
+  --line: rgba(20, 18, 14, 0.1);
+  --line-strong: rgba(20, 18, 14, 0.2);
+
+  /* Evidence, as weight: the better corroborated a receipt is, the darker and
+     more solid its mark. A value ladder rather than a colour code. */
+  --tier-3: #16150f;
+  --tier-2: #78746d;
+  --tier-1: #c4c0b9;
+
+  --amber: #b5762a;
+  --error: #bf4a40;
+
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, monospace;
+  --sans: Inter, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Starting under load: hangs back, then goes past the mark and settles. Gentle
+     on both ends — a deep undershoot reads as a twitch once five things are
+     riding the same curve at five different times. */
+  --spin: cubic-bezier(0.5, -0.06, 0.25, 1.16);
+  /* Letting go: no kick, just a long tail. */
+  --coast: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 11px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  /* The reading column. Transcript and composer share it so they read as one
+     surface rather than a centred page with a full-bleed bar under it. */
+  --col: 820px;
+
+  /* ---------------------------------------------------------------------
+     Chart series.
+
+     The one place colour is allowed outside the aurora, because here it is
+     carrying data rather than mood. The order is load-bearing, not cosmetic:
+     it is a validated sequence where every adjacent pair stays separable under
+     colour-vision deficiency, so a reader who cannot tell red from green can
+     still tell series 4 from series 5. Slots are assigned in order and never
+     cycled — a ninth series folds into "other" instead of reusing a hue.
+
+     Checked against this app's white surface, not a generic one: worst adjacent
+     CVD ΔE 9.1, worst normal-vision ΔE 19.6. Three slots sit under 3:1 contrast
+     on white, which is why every chart ships a legend and a table view — hue is
+     never the only channel.
+     --------------------------------------------------------------------- */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-7: #4a3aa7;
+  --viz-8: #e34948;
+}
+
+/* ---------------------------------------------------------------------------
+   Aurora.
+
+   Built in three layers, because a handful of coloured blobs over white reads as
+   stains, not as light:
+
+     1. a continuous hue band — one wide gradient that runs indigo → violet →
+        rose → peach → apricot, panning slowly across itself. This is what makes
+        the field one thing instead of separate patches: hue is never allowed to
+        jump, it only ever slides.
+     2. drifting lobes that modulate the band's density, each on its own period
+        for position and a different one for opacity, so the light breathes as
+        well as moves.
+     3. film grain. This is the layer people actually read as "expensive" — wide
+        smooth gradients band into visible steps on an 8-bit display, and a
+        percent of noise dissolves the steps into texture.
+
+   Everything blends in `multiply` over an explicit white ground, so the pastels
+   compound into deeper colour where they overlap instead of washing out. The
+   whole thing is masked to dissolve well above the content, so text is always
+   read on paper.
+   --------------------------------------------------------------------------- */
+
+/* The frame. Owns the mask, and the one state the app changes: while a run is in
+   flight the field saturates and reaches further down the window. Two layers
+   rather than one because the inner filter is already animating — stacking the
+   busy filter above it means neither has to know about the other. */
+.aurora {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 62vh;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  filter: saturate(1);
+  /* Coasting back: no kick, long tail, and the frame lets go last. */
+  transition: height 2.4s var(--coast) 0.1s, filter 2s var(--coast);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 18%, rgba(0,0,0,0.52) 46%, rgba(0,0,0,0.13) 74%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 18%, rgba(0,0,0,0.52) 46%, rgba(0,0,0,0.13) 74%, transparent 100%);
+}
+
+/* Thinking, made visible several ways at once: the field speeds up (playback
+   rate, set in App.svelte), the colour deepens, the lobes sink, and the frame
+   opens further down the window.
+
+   They are deliberately *not* synchronised. Moving everything on one clock is
+   what makes a change read as one rigid object being shoved — the colour goes
+   first, because that is the ignition, then each lobe leaves on its own delay
+   and takes its own time, and the frame follows. Same gesture, ragged edges. */
+.aurora.busy {
+  height: 92vh;
+  filter: saturate(1.92) contrast(1.05);
+  transition: height 2.3s var(--spin) 0.22s, filter 1.4s var(--spin);
+}
+
+.field {
+  position: absolute;
+  inset: 0;
+  /* Opaque white so `multiply` below composites against paper. Without it the
+     blobs multiply against transparency and go muddy. */
+  background: var(--canvas);
+  isolation: isolate;
+  /* The colours themselves drift, not just the shapes. */
+  animation: auroraHue 52s ease-in-out infinite alternate;
+}
+
+/* The lobes' descent. Every one has its own offset, its own duration and its own
+   delay — the spread is the whole point. A uniform translate on the parent moved
+   them as one sheet, which is what "they all drop at once" was describing. */
+.lobe {
+  position: absolute;
+  inset: 0;
+  transition: transform 2.4s var(--coast) 0s;
+}
+
+.aurora.busy .lobe {
+  transform: translate3d(var(--dx), var(--dy), 0) scale(var(--sc));
+  transition: transform var(--t) var(--spin) var(--d);
+}
+
+.l1 { --dx: -2vw;   --dy: 14vh; --sc: 1.14; --t: 1.7s; --d: 0.05s; }
+.l2 { --dx:  2.5vw; --dy: 8vh;  --sc: 1.07; --t: 2.2s; --d: 0.26s; }
+.l3 { --dx: -2.5vw; --dy: 17vh; --sc: 1.18; --t: 1.5s; --d: 0.13s; }
+.l4 { --dx:  2vw;   --dy: 10vh; --sc: 1.10; --t: 2.4s; --d: 0.38s; }
+.l5 { --dx: -1.5vw; --dy: 15vh; --sc: 1.15; --t: 1.9s; --d: 0.19s; }
+
+/* Coasting back on its own spread too, so the settle is as ragged as the start. */
+.l2 { transition-duration: 2.6s; }
+.l4 { transition-duration: 2.8s; }
+
+@keyframes auroraHue {
+  from { filter: hue-rotate(-7deg) saturate(1.02); }
+  50%  { filter: hue-rotate(6deg) saturate(1.12); }
+  to   { filter: hue-rotate(-1deg) saturate(1.05); }
+}
+
+/* 1 — the band. Twice the width of the frame, panned end to end: the colour at
+   any given point genuinely changes over time rather than just moving. */
+.field::before {
+  content: "";
+  position: absolute;
+  inset: -18% -8% auto -8%;
+  height: 118%;
+  background: linear-gradient(
+    97deg,
+    #c3ccff 0%,
+    #b7d6f7 13%,
+    #cbc9f8 26%,
+    #dcc6ee 38%,
+    #f4c8dd 50%,
+    #ffcfc6 62%,
+    #ffd2ad 74%,
+    #ffdfba 86%,
+    #e4dcff 100%
+  );
+  /* Only slightly wider than the frame: the whole cool→warm sweep has to be
+     visible at once, otherwise panning just parks you inside one hue. */
+  background-size: 138% 100%;
+  filter: blur(52px);
+  mix-blend-mode: multiply;
+  opacity: 0.88;
+  animation: bandPan 44s ease-in-out infinite alternate;
+  /* Off-centre and pulled to the top, so the field has a bright core and thins
+     toward the corners instead of tinting every pixel equally. */
+  -webkit-mask-image: radial-gradient(108% 80% at 44% -8%, #000 16%, rgba(0,0,0,0.72) 44%, rgba(0,0,0,0.26) 70%, transparent 92%);
+  mask-image: radial-gradient(108% 80% at 44% -8%, #000 16%, rgba(0,0,0,0.72) 44%, rgba(0,0,0,0.26) 70%, transparent 92%);
+  /* The band is the heaviest thing in the field, so it moves last and longest —
+     it lags the lobes rather than travelling with them. */
+  transition: transform 2.9s var(--coast) 0s;
+}
+
+.aurora.busy .field::before {
+  transform: translateY(9vh) scale(1.08);
+  transition: transform 2.6s var(--spin) 0.42s;
+}
+
+@keyframes bandPan {
+  from { background-position: 0% 50%; }
+  to   { background-position: 100% 50%; }
+}
+
+/* 2 — the lobes. They have to carry real weight, not just tint: without a bright
+   core and a thin gap the band alone reads as flat wallpaper. */
+.field span {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  filter: blur(58px);
+  will-change: transform, opacity;
+  mix-blend-mode: multiply;
+}
+
+.field .a1 {
+  width: 50vw; height: 46vh; left: -12%; top: -20%;
+  background: radial-gradient(closest-side, rgba(128, 148, 255, 0.66), transparent 72%);
+  animation: aurora1 21s var(--ease) infinite alternate, breathe1 13s ease-in-out infinite alternate;
+}
+.field .a2 {
+  width: 40vw; height: 40vh; left: 14%; top: -14%;
+  background: radial-gradient(closest-side, rgba(174, 142, 248, 0.58), transparent 72%);
+  animation: aurora2 27s var(--ease) infinite alternate, breathe2 17s ease-in-out infinite alternate;
+}
+.field .a3 {
+  width: 42vw; height: 34vh; left: 29%; top: -4%;
+  background: radial-gradient(closest-side, rgba(248, 156, 202, 0.5), transparent 74%);
+  animation: aurora3 23s var(--ease) infinite alternate, breathe3 11s ease-in-out infinite alternate;
+}
+.field .a4 {
+  width: 42vw; height: 42vh; right: 9%; top: -16%;
+  background: radial-gradient(closest-side, rgba(255, 156, 128, 0.6), transparent 72%);
+  animation: aurora4 19s var(--ease) infinite alternate, breathe4 15s ease-in-out infinite alternate;
+}
+.field .a5 {
+  width: 46vw; height: 46vh; right: -14%; top: -22%;
+  background: radial-gradient(closest-side, rgba(255, 182, 108, 0.66), transparent 72%);
+  animation: aurora5 25s var(--ease) infinite alternate, breathe5 19s ease-in-out infinite alternate;
+}
+
+/* Long travel, so the composition genuinely rearranges rather than breathing in
+   place. Each period is coprime-ish with the others: the field never repeats. */
+@keyframes aurora1 { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(19vw, 11vh, 0) scale(1.24); } }
+@keyframes aurora2 { from { transform: translate3d(0, 0, 0) scale(1.1); } to { transform: translate3d(-13vw, 17vh, 0) scale(0.88); } }
+@keyframes aurora3 { from { transform: translate3d(0, 0, 0) scale(0.92); } to { transform: translate3d(14vw, -8vh, 0) scale(1.2); } }
+@keyframes aurora4 { from { transform: translate3d(0, 0, 0) scale(1.06); } to { transform: translate3d(-17vw, 14vh, 0) scale(0.9); } }
+@keyframes aurora5 { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(-21vw, -10vh, 0) scale(1.26); } }
+
+/* Intensity on its own clock, so a lobe can fade while it moves — that beat
+   mismatch is most of what keeps the field from looking looped. */
+@keyframes breathe1 { from { opacity: 0.95; } to { opacity: 0.5; } }
+@keyframes breathe2 { from { opacity: 0.55; } to { opacity: 1; } }
+@keyframes breathe3 { from { opacity: 0.9; } to { opacity: 0.42; } }
+@keyframes breathe4 { from { opacity: 0.6; } to { opacity: 1; } }
+@keyframes breathe5 { from { opacity: 1; } to { opacity: 0.58; } }
+
+/* 3 — grain. Fine fractal noise at a few percent: invisible as texture, decisive
+   against the banding that gives large gradients away as cheap. */
+.field::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.075;
+  mix-blend-mode: overlay;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  background: var(--canvas);
+  color: var(--body);
+  font-family: var(--sans);
+  font-weight: 420;
+  font-size: 13.5px;
+  line-height: 1.62;
+  letter-spacing: 0.1px;
+  font-feature-settings: "calt", "kern", "liga", "ss03", "tnum";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.15px; color: var(--ink); margin: 0; }
+code, pre { font-family: var(--mono); font-feature-settings: "calt" 0; }
+
+:focus-visible { outline: 2px solid var(--line-strong); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------------------
+   Motion — functional only. Nothing pulses or shimmers for decoration.
+   --------------------------------------------------------------------------- */
+
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes blink { 0%, 45% { opacity: 1; } 55%, 100% { opacity: 0.18; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: rgba(20, 18, 14, 0.14);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(20, 18, 14, 0.24); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------------------------------------------------------------------------
+   Markdown — models write in it, so the transcript has to read it.
+   --------------------------------------------------------------------------- */
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md p { margin: 0 0 10px; }
+.md strong { color: var(--ink); font-weight: 600; }
+.md em { font-style: italic; }
+
+.md h1, .md h2, .md h3, .md h4 {
+  color: var(--ink);
+  font-weight: 550;
+  line-height: 1.35;
+  margin: 18px 0 8px;
+  letter-spacing: -0.15px;
+}
+.md h1 { font-size: 17px; }
+.md h2 { font-size: 15.5px; }
+.md h3, .md h4 { font-size: 14px; }
+
+.md ul, .md ol { margin: 0 0 10px; padding-left: 19px; }
+.md li { margin: 3px 0; }
+.md li::marker { color: var(--ash); }
+
+.md code {
+  font-size: 12px;
+  padding: 1.5px 5px;
+  border-radius: var(--r-xs);
+  background: var(--s2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.md pre {
+  margin: 10px 0 12px;
+  padding: 13px 15px;
+  background: var(--s1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+  line-height: 1.55;
+}
+.md pre code { padding: 0; border: none; background: none; font-size: 12px; }
+
+.md blockquote {
+  margin: 10px 0;
+  padding: 2px 0 2px 13px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--mute);
+}
+
+.md table { border-collapse: collapse; margin: 10px 0; font-size: 12.5px; width: 100%; }
+.md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+.md th { color: var(--ink); font-weight: 550; background: var(--s1); }
+
+.md hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+
+/* Links are shown, never followed: this window has no egress, and a webview that
+   navigated away on click would quietly contradict that. */
+.md a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line-strong);
+  cursor: default;
+}
